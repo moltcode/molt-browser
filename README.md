@@ -52,7 +52,7 @@ All commands accept `--tab ID`, `--json` and `--timeout SECONDS`.
 - **Actions** go through `chrome.debugger` (CDP `Input.*`), so clicks and
   keys are trusted events and work in background tabs without taking focus.
   Chrome shows its "started debugging this browser" bar while a tab is under
-  control. Tabs are released after 2 minutes idle, or on `release`.
+  control, and detaches 15 seconds after the last action, or on `release`.
 - **Refs follow Cua Driver's rules.** Each snapshot bumps a per-page
   generation, and a ref such as `g3:e12` only resolves against the snapshot
   that produced it. Stale refs fail loudly instead of hitting the wrong

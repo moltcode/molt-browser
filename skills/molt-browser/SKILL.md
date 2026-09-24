@@ -49,17 +49,16 @@ molt-browser body <request-id>                 # a response body
 molt-browser eval "document.querySelectorAll('li').length"
 ```
 
-Console and network are recorded from the moment molt-browser first touches
-the tab. Reload (`molt-browser reload`) to capture a page load from the start.
+Console and network are recorded while molt-browser is attached to the tab
+(from your first action until 15 seconds after your last). Reload to capture a page load from the start.
 
 ## Etiquette
 
 - `stopped_by_user` means the user pressed Stop on that tab. Don't retry, and
   don't switch tabs to get around it. Ask the user.
-- Run `molt-browser release` when you're done with a tab, so Chrome's
-  "debugging this browser" bar goes away. Idle tabs are released after
-  2 minutes anyway.
+- Run `molt-browser release` when you're done with a tab. Debugging also
+  detaches on its own 15 seconds after your last action.
 - Don't submit payments, send messages or delete data without the user's
   explicit go-ahead in this conversation.
-- Chrome blocks extensions on `chrome://` pages and the Web Store
-  (`restricted_page`).
+- Chrome blocks every extension on `chrome://` pages and the Web Store
+  (`restricted_page`). Ask the user to do those by hand.

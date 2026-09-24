@@ -11,7 +11,10 @@ import { snapshotPage, resolveTarget, prepareTyping, pageText, viewportInfo, scr
 
 const HOST = "com.moltcode.browser";
 const VERSION = chrome.runtime.getManifest().version;
-const IDLE_MS = 2 * 60 * 1000;
+// Debugging attaches on an agent's first action and detaches this long after
+// its last one, so Chrome's "debugging this browser" bar only shows while an
+// agent is working.
+const IDLE_MS = 15 * 1000;
 const RING = 500;
 
 let port = null;
@@ -124,7 +127,7 @@ function checkAllowed(tab) {
   }
   const url = tab.url || tab.pendingUrl || "";
   if (/^(chrome|edge|brave|about|devtools|chrome-extension|view-source):/.test(url) || url.startsWith("https://chromewebstore.google.com") || url.startsWith("https://chrome.google.com/webstore")) {
-    fail("restricted_page", `Chrome does not let extensions control ${url}. Navigate the tab to a web page first.`);
+    fail("restricted_page", `Chrome does not let any extension control ${url}. Ask the user to do this page by hand.`);
   }
 }
 
@@ -166,7 +169,7 @@ async function detach(tabId) {
 setInterval(() => {
   const now = Date.now();
   for (const [tabId, s] of sessions) if (now - s.lastUsed > IDLE_MS) detach(tabId);
-}, 15000);
+}, 3000);
 
 chrome.debugger.onDetach.addListener(({ tabId }, reason) => {
   if (!sessions.has(tabId)) return;

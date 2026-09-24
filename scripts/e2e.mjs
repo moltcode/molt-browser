@@ -58,7 +58,9 @@ const proc = spawn(
     ...(headed ? ["--window-position=3000,3000"] : ["--headless=new"]),
     "about:blank",
   ],
-  { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] }
+  // Chrome passes its environment to the native host; the test host must
+  // never see the user's own browser.
+  { stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"], env }
 );
 proc.stderr.on("data", () => {});
 
