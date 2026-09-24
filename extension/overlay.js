@@ -73,6 +73,34 @@
   const ring = root.querySelector(".ring");
   const label = root.querySelector(".label");
   let labelTimer;
+  let faviconObserver;
+  const agentFavicon = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#7c3aed"/><path d="M8 5v22l6.5-6 4 8 5-2.5-4-8H28Z" fill="white" stroke="#31205a" stroke-width="1.5" stroke-linejoin="round"/></svg>')}`;
+
+  function showFavicon() {
+    const head = document.head;
+    if (!head) return;
+    let icon = head.querySelector('link[data-molt-agent-favicon]');
+    if (!icon) {
+      icon = document.createElement("link");
+      icon.rel = "icon";
+      icon.dataset.moltAgentFavicon = "";
+      icon.href = agentFavicon;
+      head.appendChild(icon);
+    }
+    if (!faviconObserver) {
+      faviconObserver = new MutationObserver(() => {
+        const icons = head.querySelectorAll('link[rel~="icon"]');
+        if (icon.isConnected && icons[icons.length - 1] !== icon) head.appendChild(icon);
+      });
+      faviconObserver.observe(head, { childList: true });
+    }
+  }
+
+  function hideFavicon() {
+    faviconObserver?.disconnect();
+    faviconObserver = null;
+    document.querySelector('link[data-molt-agent-favicon]')?.remove();
+  }
 
   root.querySelector(".stop").addEventListener("click", (e) => {
     e.preventDefault();
@@ -101,9 +129,11 @@
   const ops = {
     show() {
       mount();
+      showFavicon();
       frame.classList.add("on");
     },
     hide() {
+      hideFavicon();
       frame.classList.remove("on");
       cursor.classList.remove("shown");
     },
@@ -117,6 +147,7 @@
     },
     async move({ x, y, label: text, from }) {
       mount();
+      showFavicon();
       frame.classList.add("on");
       if (!cursor.classList.contains("shown")) {
         // New page or first action: start from where the cursor last was.
@@ -137,6 +168,7 @@
     },
     label({ label: text, at }) {
       mount();
+      showFavicon();
       frame.classList.add("on");
       if (at && !cursor.classList.contains("shown")) {
         place(at.x, at.y);

@@ -33,8 +33,8 @@ Tabs and pages
   focus                           bring the tab to the front
   release                         stop controlling the tab (debugger detaches)
 
-  Without --tab, commands target the tab the last 'open' created (while it
-  exists), otherwise the active tab of the focused window.
+  Without --tab, commands target this agent session's last opened tab.
+  The foreground tab is never used implicitly.
 
 Observe
   snapshot [--limit N] [--offset N] [--all]
@@ -69,12 +69,13 @@ Setup
 
 Global flags
   --tab ID        target tab (see the default above)
+  --allow-active  share the foreground tab when the user explicitly asks
   --json          print the raw JSON result
   --no-page       don't print the page after an action
   --timeout S     seconds to wait for the extension (default 60)
 `
 
-var boolFlags = map[string]bool{"focus": true, "clear": true, "submit": true, "all": true, "json": true, "help": true, "no-page": true}
+var boolFlags = map[string]bool{"focus": true, "allow-active": true, "clear": true, "submit": true, "all": true, "json": true, "help": true, "no-page": true}
 
 type args struct {
 	pos   []string
@@ -154,6 +155,14 @@ func main() {
 
 func buildRequest(cmd string, rest []string, a args) (string, map[string]any, error) {
 	p := map[string]any{}
+	if session := os.Getenv("MOLT_BROWSER_SESSION"); session != "" {
+		p["session"] = session
+	} else if session := os.Getenv("MOLTCODE_SESSION_ID"); session != "" {
+		p["session"] = session
+	}
+	if a.has("allow-active") {
+		p["allow_active"] = true
+	}
 	if a.has("no-page") {
 		p["page"] = false
 	}

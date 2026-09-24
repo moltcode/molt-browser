@@ -2,7 +2,9 @@
 
 Lets Molt agents drive and debug **your real Chrome**: your profile, your
 logins, your open tabs. Every action shows an agent cursor in the page, the
-tab glows while an agent has it, and a **Stop** pill hands control back to you.
+tab glows and shows a purple agent favicon while an agent has it, and a
+**Stop** pill hands control back to you. The original favicon returns when
+the agent releases the tab.
 
 ```
 agent → molt-browser CLI → unix socket → native messaging host → Molt extension → Chrome
@@ -61,6 +63,10 @@ All commands accept `--tab ID`, `--json` and `--timeout SECONDS`.
   Coordinate clicks must name the screenshot (`--capture`) they came from.
 - **Observation** (console, exceptions, network) is recorded from the moment
   the extension attaches to a tab.
+- **Foreground protection.** Each Molt session keeps its own background tab.
+  Commands never silently fall back to the tab you're using. If you switch
+  to an agent tab, further actions are refused until it is in the background again.
+  `--allow-active` is an explicit opt-in for sharing the foreground tab.
 - **Stop.** The pill in the page, the toolbar popup, or cancelling Chrome's
   debugging bar all block agents on that tab until you re-allow it from the
   popup. Agents get `stopped_by_user`.

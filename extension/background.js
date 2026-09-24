@@ -22,18 +22,22 @@ let reconnectTimer = null;
 
 // tabId -> { console: [], network: Map, captures: Map, lastCapture, cursor, lastUsed }
 const sessions = new Map();
+const allowActive = new Map();
 // Tabs where the user pressed Stop (or cancelled the debugger bar).
 let stopped = new Set();
-// Tab the last `open` created; the default target while it exists.
-let agentTab = null;
+// Each Molt session keeps its own tab. A single browser-wide default lets one
+// agent's `open` silently redirect another agent's next click.
+let agentTabs = {};
+let tabOwners = {};
 
-const ready = chrome.storage.session.get(["stopped", "agentTab"]).then((saved) => {
+const ready = chrome.storage.session.get(["stopped", "agentTabs", "tabOwners"]).then((saved) => {
   stopped = new Set(saved.stopped || []);
-  agentTab = saved.agentTab ?? null;
+  agentTabs = saved.agentTabs || {};
+  tabOwners = saved.tabOwners || {};
 });
 
 function persist() {
-  chrome.storage.session.set({ stopped: [...stopped], agentTab });
+  chrome.storage.session.set({ stopped: [...stopped], agentTabs, tabOwners });
 }
 
 // ---------------------------------------------------------------------------
@@ -101,20 +105,55 @@ function withTimeout(promise, ms, code, message) {
 }
 
 async function targetTab(params) {
+  const owner = params.session || "local";
+  let tab;
   if (params.tab != null) {
-    const tab = await chrome.tabs.get(params.tab).catch(() => null);
+    tab = await chrome.tabs.get(params.tab).catch(() => null);
     if (!tab) fail("no_tab", `tab ${params.tab} does not exist (molt-browser tabs lists them)`);
-    return tab;
+  } else if (agentTabs[owner] != null) {
+    tab = await chrome.tabs.get(agentTabs[owner]).catch(() => null);
+    if (!tab) {
+      delete agentTabs[owner];
+      persist();
+    }
   }
-  if (agentTab != null) {
-    const tab = await chrome.tabs.get(agentTab).catch(() => null);
-    if (tab) return tab;
-    agentTab = null;
+  if (!tab) fail("no_agent_tab", "open a background tab first, or pass --tab ID explicitly (molt-browser tabs lists them)");
+  if (tabOwners[tab.id] && tabOwners[tab.id] !== owner) {
+    fail("tab_in_use", `tab ${tab.id} belongs to another agent session; open your own tab`);
+  }
+  if (!params.allow_active) await assertBackground(tab.id);
+  allowActive.set(tab.id, !!params.allow_active);
+  if (agentTabs[owner] !== tab.id || tabOwners[tab.id] !== owner) {
+    agentTabs[owner] = tab.id;
+    tabOwners[tab.id] = owner;
     persist();
   }
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true, windowType: "normal" });
-  if (!tab) fail("no_tab", "no focused browser tab; pass --tab");
   return tab;
+}
+
+async function assertBackground(tabId) {
+  const [front] = await chrome.tabs.query({ active: true, lastFocusedWindow: true, windowType: "normal" });
+  if (front?.id === tabId) {
+    fail("active_tab", `tab ${tabId} is the user's foreground tab. Work in a background tab, or pass --allow-active only when the user asked to share it.`);
+  }
+}
+
+function forgetTab(tabId) {
+  allowActive.delete(tabId);
+  let changed = tabOwners[tabId] != null;
+  delete tabOwners[tabId];
+  for (const [session, id] of Object.entries(agentTabs)) {
+    if (id === tabId) {
+      delete agentTabs[session];
+      changed = true;
+    }
+  }
+  if (changed) persist();
+}
+
+async function guardInput(tabId) {
+  checkAllowed({ id: tabId, url: "" });
+  if (!allowActive.get(tabId)) await assertBackground(tabId);
 }
 
 function checkAllowed(tab) {
@@ -157,6 +196,7 @@ async function cdp(tabId, method, params = {}) {
 
 async function attach(tab) {
   checkAllowed(tab);
+  await guardInput(tab.id);
   let session = sessions.get(tab.id);
   if (!session) {
     try {
@@ -185,6 +225,7 @@ async function keepAlive(tabId) {
 async function detach(tabId) {
   if (!sessions.has(tabId)) return false;
   sessions.delete(tabId);
+  allowActive.delete(tabId);
   await chrome.debugger.detach({ tabId }).catch(() => {});
   await overlay(tabId, { op: "hide" }, { inject: false });
   return true;
@@ -220,10 +261,8 @@ async function reattach(tabId) {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   sessions.delete(tabId);
-  if (stopped.delete(tabId) || agentTab === tabId) {
-    if (agentTab === tabId) agentTab = null;
-    persist();
-  }
+  if (stopped.delete(tabId)) persist();
+  forgetTab(tabId);
 });
 
 async function overlay(tabId, msg, { inject = true } = {}) {
@@ -240,6 +279,9 @@ async function overlay(tabId, msg, { inject = true } = {}) {
 // Calls window.__molt.<name>(...args) from lib.js in the page's isolated
 // world, injecting lib.js first (a no-op when it's already there).
 async function inPage(tabId, name, ...args) {
+  if (["target", "field", "findOption", "selectOption", "selectContents", "markFileInput", "scrollBy"].includes(name)) {
+    await guardInput(tabId);
+  }
   let results;
   try {
     await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ["lib.js"] });
@@ -301,6 +343,7 @@ async function pageSummary(tabId, verb) {
 async function navigateWith(params, verb, action) {
   const tab = await targetTab(params);
   checkAllowed(tab);
+  await guardInput(tab.id);
   const loaded = waitForLoad(tab.id);
   await action(tab.id);
   await loaded;
@@ -348,6 +391,7 @@ function keyEvent(spec) {
 }
 
 async function pressKey(tabId, spec) {
+  await guardInput(tabId);
   const ev = keyEvent(spec);
   const base = { key: ev.key, code: ev.code, windowsVirtualKeyCode: ev.keyCode, modifiers: ev.modifiers };
   await cdp(tabId, "Input.dispatchKeyEvent", { type: ev.text ? "keyDown" : "rawKeyDown", ...base, text: ev.text, unmodifiedText: ev.text });
@@ -355,6 +399,7 @@ async function pressKey(tabId, spec) {
 }
 
 async function mouseClick(tabId, x, y) {
+  await guardInput(tabId);
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
   await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
@@ -462,7 +507,7 @@ const handlers = {
         window: t.windowId,
         active: t.active,
         focused: t.id === focused?.id,
-        agent: t.id === agentTab,
+        agent: tabOwners[t.id] != null,
         controlled: sessions.has(t.id),
         stopped: stopped.has(t.id),
         url: t.url,
@@ -471,11 +516,12 @@ const handlers = {
     };
   },
 
-  async open({ url, focus }) {
+  async open({ url, focus, session }) {
     const [current] = await chrome.tabs.query({ active: true, lastFocusedWindow: true, windowType: "normal" });
     const tab = await chrome.tabs.create({ url, active: !!focus, windowId: current?.windowId });
     const loaded = waitForLoad(tab.id);
-    agentTab = tab.id;
+    agentTabs[session || "local"] = tab.id;
+    tabOwners[tab.id] = session || "local";
     persist();
     await groupTab(tab);
     if ((await chrome.tabs.get(tab.id)).status !== "complete") await loaded;
@@ -489,19 +535,16 @@ const handlers = {
   reload: (p) => navigateWith(p, "reloaded", (id) => chrome.tabs.reload(id)),
 
   async focus(p) {
-    const tab = await targetTab(p);
+    const tab = await targetTab({ ...p, allow_active: true });
     await chrome.tabs.update(tab.id, { active: true });
     await chrome.windows.update(tab.windowId, { focused: true });
     return pageSummary(tab.id, "focused");
   },
 
   async release(p) {
-    const tab = await targetTab(p);
+    const tab = await targetTab({ ...p, allow_active: true });
     const was = await detach(tab.id);
-    if (agentTab === tab.id) {
-      agentTab = null;
-      persist();
-    }
+    forgetTab(tab.id);
     return { tab: tab.id, summary: was ? `released tab ${tab.id}` : `tab ${tab.id} was not under control` };
   },
 
@@ -587,6 +630,7 @@ const handlers = {
     }
     if (p.clear) await inPage(tab.id, "selectContents");
     // One insertText for the whole string: long text lands at once.
+    await guardInput(tab.id);
     if (p.text) await cdp(tab.id, "Input.insertText", { text: p.text });
     if (p.submit) await pressKey(tab.id, "Enter");
     await sleep(p.submit ? 600 : 100);
@@ -646,6 +690,7 @@ const handlers = {
     const y = view.h / 2;
     const deltaY = sign * (p.pages ?? 1) * view.h * 0.85;
     await moveCursor(tab.id, s, x, y, `Scrolling ${p.direction}`);
+    await guardInput(tab.id);
     if (view.hidden) {
       // Chrome holds synthetic wheel events for tabs that aren't painting.
       await inPage(tab.id, "scrollBy", deltaY);
@@ -664,6 +709,7 @@ const handlers = {
 
   async eval(p) {
     const tab = await targetTab(p);
+    await guardInput(tab.id);
     await attach(tab);
     const r = await cdp(tab.id, "Runtime.evaluate", {
       expression: p.expression,
@@ -717,6 +763,7 @@ const handlers = {
 };
 
 async function clickAt(tabId, s, x, y, label, { pulse = true } = {}) {
+  await guardInput(tabId);
   await moveCursor(tabId, s, x, y, label);
   await mouseClick(tabId, x, y);
   if (pulse) await overlay(tabId, { op: "pulse" });
@@ -739,6 +786,7 @@ async function fillField(tabId, s, target, value) {
     case "text":
       await clickAt(tabId, s, f.x, f.y, `Filling ${what}`, { pulse: false });
       await inPage(tabId, "selectContents");
+      await guardInput(tabId);
       await cdp(tabId, "Input.insertText", { text: String(value) });
       // Let the page settle (autofill popups, input handlers) before the
       // next field's click.
@@ -755,6 +803,7 @@ async function chooseOption(tabId, s, target, option) {
   const f = await inPage(tabId, "field", target);
   const what = describe(f);
   if (f.kind === "select") {
+    await guardInput(tabId);
     await moveCursor(tabId, s, f.x, f.y, `Choosing ${option}`);
     const r = await inPage(tabId, "selectOption", target, option);
     return `${what} set to "${r.chosen}"`;
@@ -776,11 +825,13 @@ async function chooseOption(tabId, s, target, option) {
 }
 
 async function uploadFiles(tabId, s, target, files) {
+  await guardInput(tabId);
   const mark = `u${Date.now().toString(36)}`;
   const marked = await inPage(tabId, "markFileInput", target, mark);
   if (marked.ok) {
     const found = await cdp(tabId, "Runtime.evaluate", { expression: `document.querySelector('[data-molt-upload="${mark}"]')` });
     if (!found.result?.objectId) fail("not_found", "could not reach the file input from the page");
+    await guardInput(tabId);
     await cdp(tabId, "DOM.setFileInputFiles", { files, objectId: found.result.objectId });
     await sleep(300);
     return `attached ${files.length} file(s)`;
@@ -794,6 +845,7 @@ async function uploadFiles(tabId, s, target, files) {
     const opened = new Promise((resolve) => (s.onFileChooser = resolve));
     await clickAt(tabId, s, t.x, t.y, `Uploading via ${describe(t)}`);
     const chooser = await withTimeout(opened, 5000, "no_file_chooser", `clicking ${describe(t)} did not open a file chooser`);
+    await guardInput(tabId);
     await cdp(tabId, "DOM.setFileInputFiles", { files, backendNodeId: chooser.backendNodeId });
   } finally {
     s.onFileChooser = null;
@@ -827,7 +879,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const tabId = msg.tabId ?? sender.tab?.id;
     if (tabId != null) {
       stopped.add(tabId);
-      if (agentTab === tabId) agentTab = null;
+      forgetTab(tabId);
       persist();
       detach(tabId).then(() => sendResponse({ ok: true }));
       return true;

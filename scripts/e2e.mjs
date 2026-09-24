@@ -113,13 +113,15 @@ const cdp = (method, params = {}, sessionId) =>
 
 let failures = 0;
 // Async on purpose: the test page is served from this process.
-const cli = (...args) =>
+const runCli = (args, extraEnv = {}) =>
   new Promise((resolve) => {
-    execFile(bin, args, { env, encoding: "utf8", timeout: 30000 }, (err, stdout, stderr) => {
+    execFile(bin, args, { env: { ...env, ...extraEnv }, encoding: "utf8", timeout: 30000 }, (err, stdout, stderr) => {
       console.log(`$ molt-browser ${args.join(" ")}\n${(stdout + stderr).trim()}\n`);
       resolve(err ? null : stdout.trim());
     });
   });
+const cli = (...args) => runCli(args);
+const cliAs = (session, ...args) => runCli(args, { MOLT_BROWSER_SESSION: session });
 const expect = (ok, what) => {
   console.log(ok ? `ok   ${what}` : `FAIL ${what}`);
   if (!ok) failures++;
@@ -144,6 +146,7 @@ try {
     status = (await cli("status"));
   }
   expect(status?.includes("connected ("), "bridge connects");
+  expect((await cli("snapshot")) === null, "no agent tab never falls back to the user's foreground tab");
 
   if (!process.env.FORM_ONLY) {
   const opened = (await cli("open", `${base}/`, ...(process.env.FOCUS ? ["--focus"] : [])));
@@ -177,6 +180,7 @@ try {
 
   const consoleOut = (await cli("console"));
   expect(consoleOut?.includes("clicked 42"), "console captured page logs");
+  expect((await cli("eval", "Boolean(document.querySelector('link[data-molt-agent-favicon]'))")) === "true", "controlled tab has the agent favicon");
   const net = (await cli("network", "--filter", "/api/"));
   expect(net?.includes("/api/ping") && net.includes('"status":200'), "network captured the fetch");
 
@@ -205,6 +209,10 @@ try {
   // Stop from the page's pill equivalent: the popup/overlay message path.
   expect((await cli("tabs"))?.includes(" molt"), "tabs marks the agent tab");
   expect((await cli("release"))?.includes(`released tab ${tabId}`), "release detaches");
+  const iconAfter = await cdp("Runtime.evaluate", { expression: "Boolean(document.querySelector('link[data-molt-agent-favicon]'))", returnByValue: true }, sessionId);
+  expect(iconAfter.result.value === false, "release restores the page favicon");
+  await cdp("Target.activateTarget", { targetId: target.targetId });
+  expect((await cli("click", "--tab", tabId, "Greet")) === null, "the user's foreground tab refuses an agent click");
 
   }
   // A whole form in three calls: open, fill, click. No snapshot, no refs,
@@ -237,6 +245,20 @@ try {
   expect(got.avatar === "icon.png" && got.picked === "icon.png", "both uploads landed without a file picker");
   const ambiguous = await cli("click", "--tab", formTab, "i");
   expect(ambiguous === null, "an ambiguous name is refused instead of guessed");
+
+  // Two Molt sessions must not redirect each other's default tab.
+  const tabA = (await cliAs("session-a", "open", `${base}/two`))?.match(/tab (\d+)/)?.[1];
+  const tabB = (await cliAs("session-b", "open", `${base}/form`))?.match(/tab (\d+)/)?.[1];
+  expect(tabA && tabB && tabA !== tabB, "agents open independent background tabs");
+  expect((await cliAs("session-a", "snapshot"))?.includes(`tab ${tabA}`), "session A retains its tab");
+  expect((await cliAs("session-b", "snapshot"))?.includes(`tab ${tabB}`), "session B retains its tab");
+  expect((await cliAs("session-b", "snapshot", "--tab", tabA)) === null, "another agent cannot claim session A's tab");
+  const tabA2 = (await cliAs("session-a", "open", `${base}/form`))?.match(/tab (\d+)/)?.[1];
+  expect(tabA2 && tabA2 !== tabA, "a session can open a second tab");
+  expect((await cliAs("session-b", "snapshot", "--tab", tabA)) === null, "the first tab stays owned after a second open");
+  await cliAs("session-a", "release", "--tab", tabA);
+  await cliAs("session-a", "release", "--tab", tabA2);
+  await cliAs("session-b", "release");
 } finally {
   proc.kill();
   server.close();

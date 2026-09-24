@@ -38,11 +38,16 @@ molt-browser click "Create account"
   the same for single fields.
 - **Refs are scoped.** Each printed page is a new generation (`g4:...`);
   refs from earlier output fail with `stale_ref`. Names don't go stale.
-- **Target tab.** After `open`, commands go to that tab until it closes or
-  you `release` it; otherwise to the tab the user is looking at. Pass
-  `--tab ID` (from `molt-browser tabs`) to be explicit. Agents work in
-  background tabs without switching what the user is looking at; `--focus`
-  or `molt-browser focus` only when the user should watch.
+- **Target tab.** After `open`, commands go to that Molt session's tab until
+  it closes or you `release` it. Without one, open a new background tab or
+  pass `--tab ID` from `molt-browser tabs`. The user's foreground tab is
+  never an implicit target. Each Molt session has its own tab, and a tab in
+  use by another agent session is refused.
+- **Sharing the foreground.** If the user explicitly asks to work in the tab
+  they're viewing, pass `--allow-active` on each command. Otherwise, if they
+  switch to your tab, stop acting in it and wait for them to switch away.
+  `--focus` and `molt-browser focus` move the browser to the front; use only
+  when the user asks to watch.
 - `text` returns readable page text, cheaper than a screenshot.
 - `screenshot` saves a PNG and prints a capture id; `click --xy X,Y
   --capture ID` clicks a point read from it.
@@ -64,6 +69,8 @@ Console and network are recorded while molt-browser is attached to the tab
 
 - `stopped_by_user` means the user pressed Stop on that tab. Don't retry, and
   don't switch tabs to get around it. Ask the user.
+- `active_tab` means the user is viewing the target. Don't use
+  `--allow-active` unless they explicitly asked to share that tab.
 - Run `molt-browser release` when you're done with a tab. Debugging also
   detaches on its own 15 seconds after your last action.
 - Don't submit payments, send messages or delete data without the user's
