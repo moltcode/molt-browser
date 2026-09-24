@@ -1,0 +1,27 @@
+{
+  "name": "molt-browser",
+  "version": "0.1.0",
+  "description": "Lets Molt agents drive and debug the user's real Chrome through the Molt extension: the molt-browser CLI, its native messaging bridge, and a skill.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/moltcode/molt-browser"
+  },
+  "files": [
+    "dist",
+    "extension",
+    "skills"
+  ],
+  "molt": {
+    "manifestVersion": 1,
+    "displayName": "Browser (Chrome)",
+    "kinds": ["cli", "skill"],
+    "platforms": ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64"],
+    "contributes": {
+      "bin": {
+        "molt-browser": "dist/${platform}/molt-browser"
+      },
+      "skills": ["skills/molt-browser"]
+    }
+  }
+}

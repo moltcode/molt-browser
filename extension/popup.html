@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        margin: 0;
+        width: 260px;
+        font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: #1f1b2e;
+      }
+      header { display: flex; align-items: center; gap: 8px; padding: 12px 14px 8px; font-weight: 600; }
+      header img { width: 20px; height: 20px; }
+      .row { display: flex; align-items: center; gap: 8px; padding: 6px 14px; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; flex: none; }
+      .dot.ok { background: #22c55e; }
+      .dot.busy { background: #8b5cf6; }
+      .dot.bad { background: #ef4444; }
+      .hint { padding: 0 14px 6px 30px; color: #6b7280; font-size: 12px; }
+      code { font-size: 11px; background: #f3f0ff; padding: 1px 4px; border-radius: 4px; }
+      button {
+        margin: 8px 14px 14px; width: calc(100% - 28px); padding: 8px; border: 0; border-radius: 8px;
+        font-weight: 600; font-size: 13px; line-height: 1; font-family: inherit; cursor: pointer;
+      }
+      #stop { background: #ef4444; color: white; }
+      #allow { background: #ede9fe; color: #5b21b6; }
+      [hidden] { display: none !important; }
+      footer { padding: 0 14px 10px; color: #9ca3af; font-size: 11px; }
+    </style>
+  </head>
+  <body>
+    <header><img src="icons/32.png" alt="" />Molt Code</header>
+    <div class="row"><span id="bridge-dot" class="dot"></span><span id="bridge"></span></div>
+    <div id="bridge-hint" class="hint" hidden>
+      Install the <b>Browser</b> plugin in Molt Code, then run <code>molt-browser setup</code> once.
+    </div>
+    <div class="row"><span id="tab-dot" class="dot"></span><span id="tab"></span></div>
+    <button id="stop" hidden>Stop the agent on this tab</button>
+    <button id="allow" hidden>Let agents use this tab again</button>
+    <footer id="version"></footer>
+    <script src="popup.js"></script>
+  </body>
+</html>
