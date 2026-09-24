@@ -16,11 +16,11 @@ import (
 
 const hostName = "com.moltcode.browser"
 
-// Extension IDs allowed to connect. The first is fixed by the `key` in
-// extension/manifest.json (unpacked installs); Chrome Web Store IDs are added
-// here once assigned.
+// Extension IDs allowed to connect: the unpacked build (fixed by the `key`
+// in extension/manifest.json) and the Chrome Web Store build.
 var extensionIDs = []string{
 	"gajikdfpamklabiiaonmdeamjabehoig",
+	"fbcpkgpfkngdmblgndnahfilmblciggp",
 }
 
 func stateDir() string {

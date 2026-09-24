@@ -23,7 +23,8 @@ listens on a private socket in Molt's plugin state directory.
 
 1. In Molt Code, open **Plugins → Browser (Chrome) → Install**.
 2. Install the extension:
-   - **Chrome Web Store:** submitted for review.
+   - **Chrome Web Store:** [Molt Code Browser](https://chromewebstore.google.com/detail/fbcpkgpfkngdmblgndnahfilmblciggp)
+     (in review). Then run `molt-browser setup` once to register the bridge.
    - **Unpacked, for now:** run `molt-browser setup`. It registers the native
      host with every Chromium-family browser it finds (Chrome, Chromium,
      Brave, Edge, Arc) and prints the extension folder. Open
