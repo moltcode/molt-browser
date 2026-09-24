@@ -37,8 +37,30 @@ const page = `<!doctype html><title>Molt e2e</title>
 <input type=file id=file style="display:none" onchange="document.title='got '+this.files[0].name">
 <button style="position:absolute;top:2400px">Far button</button>
 <script>console.warn('page ready')</script></body>`;
+// A form with every kind of field fill handles, including a custom dropdown
+// and an upload button whose file input is detached from the document.
+// autocomplete=off: headless Chrome drops the debugger when a click lands
+// while its autofill popup closes (a real window doesn't).
+const form = `<!doctype html><title>Form</title><body style="font:16px sans-serif;padding:30px">
+<label for=email>Email</label> <input id=email autocomplete=off><br><br>
+<label for=role>Role</label> <select id=role><option>Viewer</option><option>Editor</option><option>Admin</option></select><br><br>
+<div id=plan role=combobox aria-label="Plan" tabindex=0 style="border:1px solid #999;padding:6px;width:160px"
+  onclick="document.getElementById('plans').hidden=false">Pick a plan</div>
+<ul id=plans role=listbox hidden>
+  <li role=option onclick="plan.textContent='Free';plans.hidden=true">Free</li>
+  <li role=option onclick="plan.textContent='Pro';plans.hidden=true">Pro</li>
+</ul>
+<label><input type=checkbox id=agree> Agree to terms</label><br><br>
+<label for=avatar>Avatar</label> <input type=file id=avatar><br><br>
+<button id=pick onclick="const i=document.createElement('input');i.type='file';i.onchange=()=>{window.picked=i.files[0].name};i.click()">Pick file</button>
+<button onclick="const $=(id)=>document.getElementById(id);window.result={email:$('email').value,role:$('role').value,plan:$('plan').textContent,agree:$('agree').checked,avatar:$('avatar').files[0]?.name,picked:window.picked}">Submit</button>
+</body>`;
 const server = createServer((req, res) => {
   if (req.url === "/api/ping") return res.end(JSON.stringify({ pong: true }));
+  if (req.url === "/form") {
+    res.setHeader("content-type", "text/html");
+    return res.end(form);
+  }
   if (req.url === "/two") return res.end("<title>Two</title><p>second page</p>");
   res.setHeader("content-type", "text/html");
   res.end(page);
@@ -123,6 +145,7 @@ try {
   }
   expect(status?.includes("connected ("), "bridge connects");
 
+  if (!process.env.FORM_ONLY) {
   const opened = (await cli("open", `${base}/`, ...(process.env.FOCUS ? ["--focus"] : [])));
   expect(opened?.includes("opened tab"), "open creates a tab");
   const tabId = opened?.match(/tab (\d+)/)?.[1];
@@ -133,21 +156,23 @@ try {
   const input = snap.match(/\[(g1:e\d+)\] textbox/)[1];
   const button = snap.match(/\[(g1:e\d+)\] button "Greet"/)[1];
 
-  expect((await cli("type", input, "Stewie"))?.includes("typed 6"), "type into ref");
-  expect((await cli("click", button))?.includes('clicked button "Greet"'), "click ref");
+  const typed = await cli("type", input, "Stewie");
+  expect(typed?.includes("typed 6"), "type into ref");
+  expect(/\[g2:e\d+\] textbox "Your name" value="Stewie"/.test(typed || ""), "an action prints the page with fresh refs");
+  expect((await cli("click", button)) === null, "refs from before an action are stale afterwards");
+  expect((await cli("click", "Greet"))?.includes('clicked button "Greet"'), "click by visible name");
   const h = (await cli("eval", "document.getElementById('h').textContent"));
   expect(h === '"Hello, Stewie"', "trusted click ran the page handler");
 
-  expect((await cli("click", button)) !== null, "a ref keeps working until the next snapshot");
-  snap = (await cli("snapshot"));
-  const stale = (await cli("click", button));
-  expect(stale === null, "ref from an older generation is rejected as stale");
+  snap = await cli("snapshot");
+  const fresh = snap.match(/\[(g\d+:e\d+)\] button "Greet"/)[1];
+  expect((await cli("click", fresh, "--no-page")) !== null, "a ref from the latest output works");
 
   const shot = (await cli("screenshot", "--json"));
   const capture = shot && JSON.parse(shot);
   expect(capture?.width > 0 && existsSync(capture.path), "screenshot writes a PNG with a capture id");
 
-  expect((await cli("upload", "--selector", "#file", join(root, "icon.png")))?.includes("set 1 file"), "upload to a hidden file input");
+  expect((await cli("upload", "--selector", "#file", join(root, "icon.png")))?.includes("attached 1 file"), "upload to a hidden file input");
   expect((await cli("eval", "document.title")) === '"got icon.png"', "page saw the uploaded file");
 
   const consoleOut = (await cli("console"));
@@ -180,6 +205,38 @@ try {
   // Stop from the page's pill equivalent: the popup/overlay message path.
   expect((await cli("tabs"))?.includes(" molt"), "tabs marks the agent tab");
   expect((await cli("release"))?.includes(`released tab ${tabId}`), "release detaches");
+
+  }
+  // A whole form in three calls: open, fill, click. No snapshot, no refs,
+  // no OS file picker.
+  const formTab = (await cli("open", `${base}/form`, "--no-page"))?.match(/tab (\d+)/)?.[1];
+  // The agent's tab stays in the background: another tab is in front, and
+  // the form tab is hidden before the agent touches it. Checked from outside
+  // (raw DevTools), since attaching changes what the page reports.
+  const { targetInfos: pages } = await cdp("Target.getTargets");
+  const front = pages.find((t) => t.type === "page" && !t.url.includes("/form"));
+  const formTarget = pages.find((t) => t.type === "page" && t.url.includes("/form"));
+  await cdp("Target.activateTarget", { targetId: front.targetId });
+  await sleep(300);
+  const visibility = async (target) => {
+    const { sessionId } = await cdp("Target.attachToTarget", { targetId: target.targetId, flatten: true });
+    const r = await cdp("Runtime.evaluate", { expression: "document.visibilityState", returnByValue: true }, sessionId);
+    await cdp("Target.detachFromTarget", { sessionId });
+    return r.result.value;
+  };
+  if (headed) expect((await visibility(formTarget)) === "hidden", "the agent's tab starts hidden in the background");
+  const filled = await cli("fill", "--tab", formTab, "Email", "sam@x.com", "Role", "Admin", "Plan", "Pro", "Agree to terms", "true", "Avatar", join(root, "icon.png"), "Pick file", join(root, "icon.png"));
+  expect(filled?.includes("filled 6 field(s)"), "one fill: text, select, custom dropdown, checkbox, file input and upload button");
+  expect(filled?.includes('via button "Pick file"'), "the upload button's file chooser is intercepted, no OS picker");
+  expect(/\[g\d+:e\d+\] button "Submit"/.test(filled || ""), "fill prints the page afterwards");
+  await cli("click", "--tab", formTab, "Submit", "--no-page");
+  const result = JSON.parse((await cli("eval", "--tab", formTab, "JSON.stringify(window.result)")) || '""');
+  const got = result ? JSON.parse(result) : {};
+  if (headed) expect((await visibility(front)) === "visible", "the user's tab stayed in front the whole time");
+  expect(got.email === "sam@x.com" && got.role === "Admin" && got.plan === "Pro" && got.agree === true, "form values landed");
+  expect(got.avatar === "icon.png" && got.picked === "icon.png", "both uploads landed without a file picker");
+  const ambiguous = await cli("click", "--tab", formTab, "i");
+  expect(ambiguous === null, "an ambiguous name is refused instead of guessed");
 } finally {
   proc.kill();
   server.close();

@@ -7,7 +7,6 @@
 // extension's isolated world, and overlay.js draws the agent cursor, the
 // glow border and the Stop pill.
 
-import { snapshotPage, resolveTarget, prepareTyping, pageText, viewportInfo, scrollPage, markFileInput } from "./page.js";
 
 const HOST = "com.moltcode.browser";
 const VERSION = chrome.runtime.getManifest().version;
@@ -135,6 +134,23 @@ async function cdp(tabId, method, params = {}) {
   try {
     return await chrome.debugger.sendCommand({ tabId }, method, params);
   } catch (e) {
+    // An input event that lands while a browser popup (autofill, a native
+    // picker) is closing loses its ack: the popup widget goes away mid-way.
+    // The event itself was delivered, so carry on.
+    if (method.startsWith("Input.") && /Detached while handling command/i.test(e.message)) {
+      await sleep(100);
+      return {};
+    }
+    // ...and then Chrome can drop the debugger from the tab. Attach again
+    // and retry the command once.
+    if (/not attached/i.test(e.message) && sessions.has(tabId)) {
+      try {
+        await reattach(tabId);
+        return await chrome.debugger.sendCommand({ tabId }, method, params);
+      } catch (retry) {
+        fail("cdp_error", `${method}: ${retry.message}`);
+      }
+    }
     fail("cdp_error", `${method}: ${e.message}`);
   }
 }
@@ -151,10 +167,19 @@ async function attach(tab) {
     session = { console: [], network: new Map(), captures: new Map(), lastCapture: null, cursor: null, lastUsed: Date.now() };
     sessions.set(tab.id, session);
     await Promise.all(["Runtime.enable", "Log.enable", "Network.enable", "Page.enable"].map((m) => cdp(tab.id, m)));
+    await keepAlive(tab.id);
   }
   session.lastUsed = Date.now();
   await overlay(tab.id, { op: "show" });
   return session;
+}
+
+// Agents work in tabs the user isn't looking at, without switching to them.
+// A hidden tab has no focus (typed text is dropped) and runs no animation
+// frames. Focus emulation fixes both: Chrome treats the tab as focused and
+// keeps it rendering while the debugger is attached.
+async function keepAlive(tabId) {
+  await cdp(tabId, "Emulation.setFocusEmulationEnabled", { enabled: true });
 }
 
 async function detach(tabId) {
@@ -173,13 +198,25 @@ setInterval(() => {
 
 chrome.debugger.onDetach.addListener(({ tabId }, reason) => {
   if (!sessions.has(tabId)) return;
+  // Only the user's Cancel on Chrome's debugging bar ends the session; other
+  // detaches (closing popups, crashes) are re-attached on the next command.
+  if (reason !== "canceled_by_user") return;
   sessions.delete(tabId);
   overlay(tabId, { op: "hide" }, { inject: false });
-  if (reason === "canceled_by_user") {
-    stopped.add(tabId);
-    persist();
-  }
+  stopped.add(tabId);
+  persist();
 });
+
+async function reattach(tabId) {
+  // Chrome can report the tab as still attached after dropping it; start
+  // clean.
+  await chrome.debugger.detach({ tabId }).catch(() => {});
+  await chrome.debugger.attach({ tabId }, "1.3");
+  await Promise.all(
+    ["Runtime.enable", "Log.enable", "Network.enable", "Page.enable"].map((m) => chrome.debugger.sendCommand({ tabId }, m).catch(() => {}))
+  );
+  await keepAlive(tabId).catch(() => {});
+}
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   sessions.delete(tabId);
@@ -200,16 +237,40 @@ async function overlay(tabId, msg, { inject = true } = {}) {
   }
 }
 
-async function inPage(tabId, func, ...args) {
+// Calls window.__molt.<name>(...args) from lib.js in the page's isolated
+// world, injecting lib.js first (a no-op when it's already there).
+async function inPage(tabId, name, ...args) {
   let results;
   try {
-    results = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func, args });
+    await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ["lib.js"] });
+    results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [0] },
+      func: (n, a) => window.__molt[n](...a),
+      args: [name, args],
+    });
   } catch (e) {
     fail("script_failed", e.message);
   }
   const value = results?.[0]?.result;
   if (value?.error) fail(value.error, value.message);
   return value;
+}
+
+// A target from CLI params: a ref, a visible name, or css=<selector>.
+function specOf(p) {
+  return p.target ?? p.ref ?? (p.selector ? `css=${p.selector}` : null);
+}
+
+// Actions answer with the page as it is afterwards, so an agent rarely needs
+// a separate snapshot call.
+async function withPage(tabId, result, p) {
+  if (p.page === false) return result;
+  try {
+    const snap = await inPage(tabId, "snapshot", { limit: 80 });
+    return { ...result, page: snap };
+  } catch {
+    return result;
+  }
 }
 
 async function moveCursor(tabId, session, x, y, label) {
@@ -369,6 +430,9 @@ chrome.debugger.onEvent.addListener(({ tabId }, method, params) => {
       if (r) Object.assign(r, { bytes: params.encodedDataLength, ms: Math.round((params.timestamp - r._t0) * 1000) });
       break;
     }
+    case "Page.fileChooserOpened":
+      s.onFileChooser?.(params);
+      break;
     case "Network.loadingFailed": {
       const r = s.network.get(params.requestId);
       if (r) Object.assign(r, { failed: params.errorText, ms: Math.round((params.timestamp - r._t0) * 1000) });
@@ -382,6 +446,13 @@ chrome.debugger.onEvent.addListener(({ tabId }, method, params) => {
 // ---------------------------------------------------------------------------
 
 const handlers = {
+  // Picks up a new build of the unpacked extension without a trip to
+  // chrome://extensions. The bridge reconnects on its own.
+  async reload_extension() {
+    setTimeout(() => chrome.runtime.reload(), 100);
+    return { summary: "extension reloading; it reconnects in a few seconds" };
+  },
+
   async tabs() {
     const [focused] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const tabs = await chrome.tabs.query({});
@@ -437,20 +508,20 @@ const handlers = {
   async snapshot(p) {
     const tab = await targetTab(p);
     await attach(tab);
-    const snap = await inPage(tab.id, snapshotPage, { limit: p.limit ?? 150, offset: p.offset ?? 0, all: !!p.all });
+    const snap = await inPage(tab.id, "snapshot", { limit: p.limit ?? 150, offset: p.offset ?? 0, all: !!p.all });
     return { tab: tab.id, ...snap };
   },
 
   async text(p) {
     const tab = await targetTab(p);
     checkAllowed(tab);
-    return inPage(tab.id, pageText, p.max ?? 20000);
+    return inPage(tab.id, "text", p.max ?? 20000);
   },
 
   async screenshot(p) {
     const tab = await targetTab(p);
     const s = await attach(tab);
-    const view = await inPage(tab.id, viewportInfo);
+    const view = await inPage(tab.id, "viewport");
     await overlay(tab.id, { op: "conceal" });
     let shot;
     try {
@@ -486,7 +557,7 @@ const handlers = {
       if (!cap || s.lastCapture !== p.capture_id) {
         fail("stale_capture", `capture ${p.capture_id} is not the latest screenshot of tab ${tab.id}; take a new one`);
       }
-      const now = await inPage(tab.id, viewportInfo);
+      const now = await inPage(tab.id, "viewport");
       if (now.scroll_x !== cap.scroll_x || now.scroll_y !== cap.scroll_y || now.url !== cap.url) {
         fail("stale_capture", "the page scrolled or navigated since that screenshot; take a new one");
       }
@@ -494,33 +565,61 @@ const handlers = {
       y = p.y / cap.dpr;
       what = `point (${Math.round(p.x)},${Math.round(p.y)})`;
     } else {
-      const target = await inPage(tab.id, resolveTarget, p.ref ?? null, p.selector ?? null);
+      const target = await inPage(tab.id, "target", specOf(p));
       ({ x, y } = target);
       what = describe(target);
       if (target.obscured_by) what += ` (covered by ${target.obscured_by})`;
     }
-    await moveCursor(tab.id, s, x, y, `Clicking ${what}`);
-    await mouseClick(tab.id, x, y);
-    await overlay(tab.id, { op: "pulse" });
+    await clickAt(tab.id, s, x, y, `Clicking ${what}`);
     await sleep(400);
-    return pageSummary(tab.id, `clicked ${what}`);
+    return withPage(tab.id, await pageSummary(tab.id, `clicked ${what}`), p);
   },
 
   async type(p) {
     const tab = await targetTab(p);
     const s = await attach(tab);
     let what = "the focused element";
-    if (p.ref || p.selector) {
-      const target = await inPage(tab.id, resolveTarget, p.ref ?? null, p.selector ?? null);
+    const spec = specOf(p);
+    if (spec) {
+      const target = await inPage(tab.id, "target", spec);
       what = describe(target);
-      await moveCursor(tab.id, s, target.x, target.y, `Typing into ${what}`);
-      await mouseClick(tab.id, target.x, target.y);
+      await clickAt(tab.id, s, target.x, target.y, `Typing into ${what}`, { pulse: false });
     }
-    if (p.clear) await inPage(tab.id, prepareTyping);
+    if (p.clear) await inPage(tab.id, "selectContents");
+    // One insertText for the whole string: long text lands at once.
     if (p.text) await cdp(tab.id, "Input.insertText", { text: p.text });
     if (p.submit) await pressKey(tab.id, "Enter");
     await sleep(p.submit ? 600 : 100);
-    return pageSummary(tab.id, `typed ${p.text.length} characters into ${what}${p.submit ? " and pressed Enter" : ""}`);
+    return withPage(tab.id, await pageSummary(tab.id, `typed ${p.text.length} characters into ${what}${p.submit ? " and pressed Enter" : ""}`), p);
+  },
+
+  // Fills a whole form in one call: [{target, value}, ...]. Text fields get
+  // their contents replaced, selects and custom dropdowns pick the option,
+  // checkboxes are set to true/false, file fields get the file paths.
+  async fill(p) {
+    const tab = await targetTab(p);
+    const s = await attach(tab);
+    const done = [];
+    for (const { target, value, files } of p.fields || []) {
+      try {
+        done.push(files ? await uploadFiles(tab.id, s, target, files) : await fillField(tab.id, s, target, value));
+      } catch (e) {
+        e.message = `${target}: ${e.message}${done.length ? ` (already set: ${done.join("; ")})` : ""}`;
+        throw e;
+      }
+    }
+    if (p.submit) {
+      await pressKey(tab.id, "Enter");
+      await sleep(600);
+    }
+    return withPage(tab.id, await pageSummary(tab.id, `filled ${done.length} field(s): ${done.join("; ")}${p.submit ? "; pressed Enter" : ""}`), p);
+  },
+
+  async select(p) {
+    const tab = await targetTab(p);
+    const s = await attach(tab);
+    const what = await chooseOption(tab.id, s, specOf(p), p.option);
+    return withPage(tab.id, await pageSummary(tab.id, what), p);
   },
 
   async press(p) {
@@ -529,37 +628,38 @@ const handlers = {
     await overlay(tab.id, { op: "label", label: `Pressing ${p.key}`, at: s.cursor });
     await pressKey(tab.id, p.key);
     await sleep(200);
-    return pageSummary(tab.id, `pressed ${p.key}`);
+    return withPage(tab.id, await pageSummary(tab.id, `pressed ${p.key}`), p);
   },
 
   async scroll(p) {
     const tab = await targetTab(p);
     const s = await attach(tab);
-    if (p.ref) {
-      const target = await inPage(tab.id, resolveTarget, p.ref, null);
+    const spec = specOf(p);
+    if (spec) {
+      const target = await inPage(tab.id, "target", spec);
       await moveCursor(tab.id, s, target.x, target.y, `Scrolled to ${describe(target)}`);
-      return pageSummary(tab.id, `scrolled ${describe(target)} into view`);
+      return withPage(tab.id, await pageSummary(tab.id, `scrolled ${describe(target)} into view`), p);
     }
-    const view = await inPage(tab.id, viewportInfo);
+    const view = await inPage(tab.id, "viewport");
     const sign = p.direction === "up" ? -1 : 1;
     const x = view.w / 2;
     const y = view.h / 2;
     const deltaY = sign * (p.pages ?? 1) * view.h * 0.85;
     await moveCursor(tab.id, s, x, y, `Scrolling ${p.direction}`);
     if (view.hidden) {
-      await inPage(tab.id, scrollPage, deltaY);
+      // Chrome holds synthetic wheel events for tabs that aren't painting.
+      await inPage(tab.id, "scrollBy", deltaY);
     } else {
       // A wheel event scrolls whatever is under the cursor, like a user would.
       await cdp(tab.id, "Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: 0, deltaY });
     }
     await sleep(300);
-    const after = await inPage(tab.id, viewportInfo);
-    return {
-      tab: tab.id,
-      scroll_y: after.scroll_y,
-      page_h: after.page_h,
-      summary: `scrolled ${p.direction} to ${after.scroll_y}/${after.page_h - after.h} px`,
-    };
+    const after = await inPage(tab.id, "viewport");
+    return withPage(
+      tab.id,
+      { tab: tab.id, scroll_y: after.scroll_y, page_h: after.page_h, summary: `scrolled ${p.direction} to ${after.scroll_y}/${after.page_h - after.h} px` },
+      p
+    );
   },
 
   async eval(p) {
@@ -585,7 +685,7 @@ const handlers = {
     const s = await attach(tab);
     const entries = s.console.slice(-(p.limit ?? 100));
     if (p.clear) s.console = [];
-    return { tab: tab.id, entries, note: "recorded since molt-browser first attached to this tab" };
+    return { tab: tab.id, entries, note: "recorded while molt-browser is attached to this tab" };
   },
 
   async network(p) {
@@ -605,20 +705,103 @@ const handlers = {
     return { tab: tab.id, ...r };
   },
 
-  // Sets files on an <input type=file>. File inputs are often hidden behind a
-  // styled button, so this takes a selector as well as a ref.
+  // Gives a page files without the OS file picker: straight onto the file
+  // input when there is one, otherwise by clicking the target with Chrome's
+  // file chooser intercepted.
   async upload(p) {
     const tab = await targetTab(p);
-    await attach(tab);
-    const mark = `u${Date.now().toString(36)}`;
-    await inPage(tab.id, markFileInput, p.ref ?? null, p.selector ?? null, mark);
-    const found = await cdp(tab.id, "Runtime.evaluate", { expression: `document.querySelector('[data-molt-upload="${mark}"]')` });
-    if (!found.result?.objectId) fail("not_found", "could not reach the file input from the page");
-    await cdp(tab.id, "DOM.setFileInputFiles", { files: p.files, objectId: found.result.objectId });
-    await sleep(500);
-    return { tab: tab.id, summary: `set ${p.files.length} file(s) on the file input` };
+    const s = await attach(tab);
+    const what = await uploadFiles(tab.id, s, specOf(p), p.files);
+    return withPage(tab.id, await pageSummary(tab.id, what), p);
   },
 };
+
+async function clickAt(tabId, s, x, y, label, { pulse = true } = {}) {
+  await moveCursor(tabId, s, x, y, label);
+  await mouseClick(tabId, x, y);
+  if (pulse) await overlay(tabId, { op: "pulse" });
+}
+
+async function fillField(tabId, s, target, value) {
+  const f = await inPage(tabId, "field", target);
+  const what = describe(f);
+  switch (f.kind) {
+    case "select":
+    case "choose":
+      return chooseOption(tabId, s, target, value);
+    case "check": {
+      const want = /^(true|on|yes|1|checked)$/i.test(String(value));
+      if (want !== f.checked) await clickAt(tabId, s, f.x, f.y, `${want ? "Checking" : "Unchecking"} ${what}`);
+      return `${what} ${want ? "checked" : "unchecked"}`;
+    }
+    case "file":
+      return uploadFiles(tabId, s, target, [].concat(value));
+    case "text":
+      await clickAt(tabId, s, f.x, f.y, `Filling ${what}`, { pulse: false });
+      await inPage(tabId, "selectContents");
+      await cdp(tabId, "Input.insertText", { text: String(value) });
+      // Let the page settle (autofill popups, input handlers) before the
+      // next field's click.
+      await sleep(250);
+      return `${what} = ${String(value).length} chars`;
+    default:
+      fail("not_fillable", `${what} is not a form field; use click`);
+  }
+}
+
+// Native <select> is set directly; custom dropdowns are clicked open and the
+// option clicked, like a user would.
+async function chooseOption(tabId, s, target, option) {
+  const f = await inPage(tabId, "field", target);
+  const what = describe(f);
+  if (f.kind === "select") {
+    await moveCursor(tabId, s, f.x, f.y, `Choosing ${option}`);
+    const r = await inPage(tabId, "selectOption", target, option);
+    return `${what} set to "${r.chosen}"`;
+  }
+  await clickAt(tabId, s, f.x, f.y, `Opening ${what}`);
+  let opt;
+  for (let i = 0; i < 15; i++) {
+    await sleep(150);
+    try {
+      opt = await inPage(tabId, "findOption", option);
+      break;
+    } catch (e) {
+      if (i === 14) throw e;
+    }
+  }
+  await clickAt(tabId, s, opt.x, opt.y, `Choosing ${opt.name}`);
+  await sleep(200);
+  return `${what} set to "${opt.name}"`;
+}
+
+async function uploadFiles(tabId, s, target, files) {
+  const mark = `u${Date.now().toString(36)}`;
+  const marked = await inPage(tabId, "markFileInput", target, mark);
+  if (marked.ok) {
+    const found = await cdp(tabId, "Runtime.evaluate", { expression: `document.querySelector('[data-molt-upload="${mark}"]')` });
+    if (!found.result?.objectId) fail("not_found", "could not reach the file input from the page");
+    await cdp(tabId, "DOM.setFileInputFiles", { files, objectId: found.result.objectId });
+    await sleep(300);
+    return `attached ${files.length} file(s)`;
+  }
+  if (!target) fail("not_found", "no single file input on the page; pass the upload button or field as the target");
+  // No input to reach: click the control with the chooser intercepted, and
+  // hand the files to whatever input the page opens it for.
+  const t = await inPage(tabId, "target", target);
+  await cdp(tabId, "Page.setInterceptFileChooserDialog", { enabled: true });
+  try {
+    const opened = new Promise((resolve) => (s.onFileChooser = resolve));
+    await clickAt(tabId, s, t.x, t.y, `Uploading via ${describe(t)}`);
+    const chooser = await withTimeout(opened, 5000, "no_file_chooser", `clicking ${describe(t)} did not open a file chooser`);
+    await cdp(tabId, "DOM.setFileInputFiles", { files, backendNodeId: chooser.backendNodeId });
+  } finally {
+    s.onFileChooser = null;
+    await cdp(tabId, "Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => {});
+  }
+  await sleep(300);
+  return `attached ${files.length} file(s) via ${describe(t)}`;
+}
 
 async function groupTab(tab) {
   try {

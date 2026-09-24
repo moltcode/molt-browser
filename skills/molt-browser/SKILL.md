@@ -15,30 +15,38 @@ don't try other browser tools.
 
 ## Loop
 
+Most tasks take a handful of calls. Every action prints the page afterwards,
+so you rarely need a separate `snapshot`.
+
 ```sh
-molt-browser open https://example.com      # new background tab, prints its id
-molt-browser snapshot                       # interactive elements with refs
-molt-browser click g1:e7                    # act on a ref from the latest snapshot
-molt-browser type g1:e3 "hello" --submit
-molt-browser snapshot                       # refs change after every snapshot
+molt-browser open https://example.com/signup     # background tab; your user's tab stays put
+molt-browser fill "Email" "sam@x.com" "Plan" "Pro" "Agree to terms" true "Avatar" ./me.png
+molt-browser click "Create account"
 ```
 
-- **Refs are scoped.** `g3:e12` means element 12 of snapshot generation 3.
-  A new snapshot, navigation or re-render makes old refs fail with
-  `stale_ref`; take a new snapshot and pick again. Never guess refs.
-- The snapshot lists only elements in the viewport. It reports how many are
-  offscreen; `scroll`, or `snapshot --all`, then `--offset N` to page.
-- **Target tab.** After `open`, commands go to that tab until it closes or you
-  `release` it. Otherwise they go to the tab the user is looking at. Pass
-  `--tab ID` (from `molt-browser tabs`) whenever you mean a specific tab.
-- `open` doesn't steal focus. Use `--focus` or `molt-browser focus` only when
-  the user should watch, or when a background tab won't render a screenshot.
-- `text` returns the page's readable text. It's cheaper than a screenshot when
-  you only need to read.
-- `screenshot` saves a PNG and prints its path and a capture id. To click a
-  point you found in the image: `click --xy X,Y --capture ID`. Coordinates
-  are image pixels, and the capture must be the latest one for the tab.
-- `click --selector CSS` works when you already know a stable selector.
+- **Targets.** Anywhere a command takes a `<target>`, use an element's
+  visible name (`"Save draft"`, `"Email"`), a ref from the last output
+  (`g3:e12`), or `css=<selector>`. Names match exactly first, then by
+  substring. An ambiguous name is an error that lists refs to choose from.
+  Never guess.
+- **`fill`** sets a whole form in one call: text fields (replaced),
+  native and custom dropdowns (by option text), checkboxes and radios
+  (`true`/`false`), and uploads. A value that is a path to an existing file
+  is uploaded through the target, whether that's a file input, a button or a
+  drop zone. The OS file picker never opens.
+- **`select <target> <option>`** and **`upload [<target>] <file>...`** do
+  the same for single fields.
+- **Refs are scoped.** Each printed page is a new generation (`g4:...`);
+  refs from earlier output fail with `stale_ref`. Names don't go stale.
+- **Target tab.** After `open`, commands go to that tab until it closes or
+  you `release` it; otherwise to the tab the user is looking at. Pass
+  `--tab ID` (from `molt-browser tabs`) to be explicit. Agents work in
+  background tabs without switching what the user is looking at; `--focus`
+  or `molt-browser focus` only when the user should watch.
+- `text` returns readable page text, cheaper than a screenshot.
+- `screenshot` saves a PNG and prints a capture id; `click --xy X,Y
+  --capture ID` clicks a point read from it.
+- `--no-page` skips the page printout when you don't need it.
 
 ## Debugging
 

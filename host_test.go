@@ -63,13 +63,25 @@ func TestBuildRequest(t *testing.T) {
 	if err != nil || method != "type" {
 		t.Fatalf("got %s %v", method, err)
 	}
-	if p["ref"] != "g2:e4" || p["text"] != "hello world" || p["submit"] != true || p["tab"] != 9 {
+	if p["target"] != "g2:e4" || p["text"] != "hello world" || p["submit"] != true || p["tab"] != 9 {
 		t.Fatalf("bad params %v", p)
 	}
 
 	a, _ = parseArgs([]string{"click", "--xy", "10,20"})
 	if _, _, err := buildRequest("click", nil, a); err == nil {
 		t.Fatal("--xy without --capture must fail")
+	}
+
+	a, _ = parseArgs([]string{"fill", "Email", "sam@x.com", "Role", "Admin", "--submit"})
+	_, p, err = buildRequest("fill", a.pos[1:], a)
+	if err != nil || len(p["fields"].([]map[string]any)) != 2 || p["submit"] != true {
+		t.Fatalf("bad fill %v %v", p, err)
+	}
+
+	a, _ = parseArgs([]string{"click", "Save", "draft"})
+	_, p, _ = buildRequest("click", a.pos[1:], a)
+	if p["target"] != "Save draft" {
+		t.Fatalf("click target %v", p["target"])
 	}
 
 	a, _ = parseArgs([]string{"open", "example.com"})

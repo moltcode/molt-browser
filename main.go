@@ -15,7 +15,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -48,24 +47,34 @@ Observe
   body <request-id>               response body of one network request
   eval <js>                       evaluate JavaScript in the page, prints JSON
 
-Act (the in-page cursor shows each action)
-  click <ref> | --selector CSS | --xy X,Y --capture ID
-  type [<ref>] <text> [--clear] [--submit]
+Act (the in-page cursor shows each action; each prints the page afterwards)
+  click <target> | --xy X,Y --capture ID
+  type [<target>] <text> [--clear] [--submit]
+  fill <target> <value> [<target> <value>]... [--submit]
+                                  a whole form in one call: text, selects,
+                                  custom dropdowns, checkboxes (true/false)
+                                  and file fields (a path)
+  select <target> <option>        native or custom dropdown
+  upload [<target>] <file>...     no OS file picker: sets the file input, or
+                                  intercepts the chooser the target opens
   press <key>                     Enter, Tab, Escape, ArrowDown, Backspace, a, ...
-  scroll [down|up] [--pages N] | scroll --to <ref>
-  upload <ref> | --selector CSS <file>...
-                                  set files on a file input
+  scroll [down|up] [--pages N] | scroll --to <target>
+
+  A <target> is a ref from the last output (g3:e12), an element's visible
+  name ("Save draft", "Email"), or css=<selector>.
 
 Setup
   setup                           register the native host, print install steps
+  reload-extension                reload an unpacked extension after an update
 
 Global flags
   --tab ID        target tab (see the default above)
   --json          print the raw JSON result
+  --no-page       don't print the page after an action
   --timeout S     seconds to wait for the extension (default 60)
 `
 
-var boolFlags = map[string]bool{"focus": true, "clear": true, "submit": true, "all": true, "json": true, "help": true}
+var boolFlags = map[string]bool{"focus": true, "clear": true, "submit": true, "all": true, "json": true, "help": true, "no-page": true}
 
 type args struct {
 	pos   []string
@@ -123,6 +132,9 @@ func main() {
 	// Idempotent; keeps the host registered for every browser on the machine.
 	written, hostErr := ensureHost()
 
+	if cmd == "reload-extension" {
+		cmd = "reload_extension"
+	}
 	switch cmd {
 	case "version", "--version":
 		fmt.Println(version)
@@ -142,6 +154,9 @@ func main() {
 
 func buildRequest(cmd string, rest []string, a args) (string, map[string]any, error) {
 	p := map[string]any{}
+	if a.has("no-page") {
+		p["page"] = false
+	}
 	if tab, ok := a.flags["tab"]; ok {
 		id, err := strconv.Atoi(tab)
 		if err != nil {
@@ -167,7 +182,7 @@ func buildRequest(cmd string, rest []string, a args) (string, map[string]any, er
 	}
 
 	switch cmd {
-	case "tabs", "back", "forward", "reload", "release", "focus":
+	case "tabs", "back", "forward", "reload", "release", "focus", "reload_extension":
 		return cmd, p, nil
 	case "open", "navigate":
 		if err := need(1, "<url>"); err != nil {
@@ -232,18 +247,18 @@ func buildRequest(cmd string, rest []string, a args) (string, map[string]any, er
 			}
 			p["x"], p["y"], p["capture_id"] = xf, yf, a.flags["capture"]
 		default:
-			if err := need(1, "<ref> | --selector CSS | --xy X,Y --capture ID"); err != nil {
+			if err := need(1, "<target> | --xy X,Y --capture ID"); err != nil {
 				return "", nil, err
 			}
-			p["ref"] = rest[0]
+			p["target"] = strings.Join(rest, " ")
 		}
 		return cmd, p, nil
 	case "type":
 		if err := need(1, "[<ref>] <text>"); err != nil {
 			return "", nil, err
 		}
-		if len(rest) >= 2 && refPattern.MatchString(rest[0]) {
-			p["ref"], rest = rest[0], rest[1:]
+		if len(rest) >= 2 {
+			p["target"], rest = rest[0], rest[1:]
 		}
 		if s := a.flags["selector"]; s != "" {
 			p["selector"] = s
@@ -257,26 +272,45 @@ func buildRequest(cmd string, rest []string, a args) (string, map[string]any, er
 		}
 		return cmd, p, nil
 	case "upload":
-		if s := a.flags["selector"]; s != "" {
-			p["selector"] = s
-		} else if len(rest) > 0 && refPattern.MatchString(rest[0]) {
-			p["ref"], rest = rest[0], rest[1:]
+		if sel := a.flags["selector"]; sel != "" {
+			p["selector"] = sel
+		} else if len(rest) > 1 || (len(rest) == 1 && !fileExists(rest[0])) {
+			p["target"], rest = rest[0], rest[1:]
 		}
 		if len(rest) == 0 {
-			return "", nil, fmt.Errorf("usage: molt-browser upload <ref> | --selector CSS <file>...")
+			return "", nil, fmt.Errorf("usage: molt-browser upload [<target>] <file>...")
 		}
-		files := make([]string, 0, len(rest))
-		for _, f := range rest {
-			abs, err := filepath.Abs(f)
-			if err != nil {
-				return "", nil, err
-			}
-			if _, err := os.Stat(abs); err != nil {
-				return "", nil, fmt.Errorf("%s: %v", f, err)
-			}
-			files = append(files, abs)
+		files, err := absFiles(rest)
+		if err != nil {
+			return "", nil, err
 		}
 		p["files"] = files
+		return cmd, p, nil
+	case "fill":
+		if len(rest) == 0 || len(rest)%2 != 0 {
+			return "", nil, fmt.Errorf("usage: molt-browser fill <target> <value> [<target> <value>]... [--submit]")
+		}
+		fields := make([]map[string]any, 0, len(rest)/2)
+		for i := 0; i < len(rest); i += 2 {
+			field := map[string]any{"target": rest[i], "value": rest[i+1]}
+			// A value that is a file on disk is an upload, whatever the
+			// target is (file input, button, drop zone); send it absolute.
+			if fileExists(rest[i+1]) {
+				abs, _ := filepath.Abs(rest[i+1])
+				field["files"] = []string{abs}
+			}
+			fields = append(fields, field)
+		}
+		p["fields"] = fields
+		if a.has("submit") {
+			p["submit"] = true
+		}
+		return cmd, p, nil
+	case "select":
+		if err := need(2, "<target> <option>"); err != nil {
+			return "", nil, err
+		}
+		p["target"], p["option"] = rest[0], strings.Join(rest[1:], " ")
 		return cmd, p, nil
 	case "press":
 		if err := need(1, "<key>"); err != nil {
@@ -286,7 +320,7 @@ func buildRequest(cmd string, rest []string, a args) (string, map[string]any, er
 		return cmd, p, nil
 	case "scroll":
 		if to := a.flags["to"]; to != "" {
-			p["ref"] = to
+			p["target"] = to
 			return cmd, p, nil
 		}
 		p["direction"] = "down"
@@ -308,7 +342,25 @@ func buildRequest(cmd string, rest []string, a args) (string, map[string]any, er
 	return "", nil, fmt.Errorf("unknown command %q (run molt-browser help)", cmd)
 }
 
-var refPattern = regexp.MustCompile(`^g\d+:e\d+$`)
+func fileExists(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && !fi.IsDir()
+}
+
+func absFiles(paths []string) ([]string, error) {
+	files := make([]string, 0, len(paths))
+	for _, f := range paths {
+		if !fileExists(f) {
+			return nil, fmt.Errorf("%s: no such file", f)
+		}
+		abs, err := filepath.Abs(f)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, abs)
+	}
+	return files, nil
+}
 
 func normalizeURL(u string) string {
 	if strings.Contains(u, "://") || strings.HasPrefix(u, "about:") || strings.HasPrefix(u, "data:") {
@@ -477,10 +529,15 @@ func printResult(cmd string, raw json.RawMessage, a args) {
 		fmt.Println(r.Body)
 	default:
 		var r struct {
-			Summary string `json:"summary"`
+			Summary string          `json:"summary"`
+			Page    json.RawMessage `json:"page"`
 		}
 		if json.Unmarshal(raw, &r) == nil && r.Summary != "" {
 			fmt.Println(r.Summary)
+			if len(r.Page) > 0 && string(r.Page) != "null" {
+				fmt.Println()
+				printSnapshot(r.Page)
+			}
 		} else {
 			fmt.Println(string(raw))
 		}
