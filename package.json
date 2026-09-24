@@ -1,6 +1,6 @@
 {
   "name": "molt-browser",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Lets Molt agents drive and debug the user's real Chrome through the Molt extension: the molt-browser CLI, its native messaging bridge, and a skill.",
   "license": "MIT",
   "repository": {

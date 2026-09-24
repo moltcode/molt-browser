@@ -7,7 +7,7 @@
 // extension's isolated world, and overlay.js draws the agent cursor, the
 // glow border and the Stop pill.
 
-import { snapshotPage, resolveTarget, prepareTyping, pageText, viewportInfo, scrollPage } from "./page.js";
+import { snapshotPage, resolveTarget, prepareTyping, pageText, viewportInfo, scrollPage, markFileInput } from "./page.js";
 
 const HOST = "com.moltcode.browser";
 const VERSION = chrome.runtime.getManifest().version;
@@ -123,7 +123,7 @@ function checkAllowed(tab) {
     );
   }
   const url = tab.url || tab.pendingUrl || "";
-  if (/^(chrome|edge|brave|about|devtools|chrome-extension|view-source):/.test(url) || url.startsWith("https://chromewebstore.google.com")) {
+  if (/^(chrome|edge|brave|about|devtools|chrome-extension|view-source):/.test(url) || url.startsWith("https://chromewebstore.google.com") || url.startsWith("https://chrome.google.com/webstore")) {
     fail("restricted_page", `Chrome does not let extensions control ${url}. Navigate the tab to a web page first.`);
   }
 }
@@ -600,6 +600,20 @@ const handlers = {
     await attach(tab);
     const r = await cdp(tab.id, "Network.getResponseBody", { requestId: p.request_id });
     return { tab: tab.id, ...r };
+  },
+
+  // Sets files on an <input type=file>. File inputs are often hidden behind a
+  // styled button, so this takes a selector as well as a ref.
+  async upload(p) {
+    const tab = await targetTab(p);
+    await attach(tab);
+    const mark = `u${Date.now().toString(36)}`;
+    await inPage(tab.id, markFileInput, p.ref ?? null, p.selector ?? null, mark);
+    const found = await cdp(tab.id, "Runtime.evaluate", { expression: `document.querySelector('[data-molt-upload="${mark}"]')` });
+    if (!found.result?.objectId) fail("not_found", "could not reach the file input from the page");
+    await cdp(tab.id, "DOM.setFileInputFiles", { files: p.files, objectId: found.result.objectId });
+    await sleep(500);
+    return { tab: tab.id, summary: `set ${p.files.length} file(s) on the file input` };
   },
 };
 

@@ -23,7 +23,7 @@ listens on a private socket in Molt's plugin state directory.
 
 1. In Molt Code, open **Plugins → Browser (Chrome) → Install**.
 2. Install the extension:
-   - **Chrome Web Store:** coming soon.
+   - **Chrome Web Store:** pending review.
    - **Unpacked, for now:** run `molt-browser setup`. It registers the native
      host with every Chromium-family browser it finds (Chrome, Chromium,
      Brave, Edge, Arc) and prints the extension folder. Open

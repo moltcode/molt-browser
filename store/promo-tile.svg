@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="280" viewBox="0 0 440 280">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6d28d9"/><stop offset="1" stop-color="#4c1d95"/></linearGradient></defs>
+  <rect width="440" height="280" fill="url(#g)"/>
+  <g transform="translate(36,92) scale(0.75)">
+    <rect width="128" height="128" rx="28" fill="#7c3aed" stroke="#a78bfa" stroke-width="3"/>
+    <rect x="20" y="26" width="88" height="76" rx="10" fill="none" stroke="#ede9fe" stroke-width="7"/>
+    <line x1="20" y1="44" x2="108" y2="44" stroke="#ede9fe" stroke-width="6"/>
+    <path d="M56 52 L56 90 L66 80.6 L73 95.8 L79.8 92.9 L73 77.9 L86.9 77.9 Z" fill="#fff" stroke="#4c1d95" stroke-width="3" stroke-linejoin="round"/>
+  </g>
+  <text x="150" y="128" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="30" font-weight="700" fill="#fff">Molt Code</text>
+  <text x="150" y="160" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="17" fill="#ede9fe">Your agents, in your Chrome.</text>
+  <text x="150" y="184" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="14" fill="#c4b5fd">Visible cursor · one-click Stop</text>
+</svg>

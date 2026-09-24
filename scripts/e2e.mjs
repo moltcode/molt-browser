@@ -34,6 +34,7 @@ const page = `<!doctype html><title>Molt e2e</title>
 <input id=name placeholder="Your name">
 <button id=go onclick="document.getElementById('h').textContent='Hello, '+document.getElementById('name').value; console.log('clicked', 42); fetch('/api/ping')">Greet</button>
 <a href="/two">Second page</a>
+<input type=file id=file style="display:none" onchange="document.title='got '+this.files[0].name">
 <button style="position:absolute;top:2400px">Far button</button>
 <script>console.warn('page ready')</script></body>`;
 const server = createServer((req, res) => {
@@ -144,6 +145,9 @@ try {
   const capture = shot && JSON.parse(shot);
   expect(capture?.width > 0 && existsSync(capture.path), "screenshot writes a PNG with a capture id");
 
+  expect((await cli("upload", "--selector", "#file", join(root, "icon.png")))?.includes("set 1 file"), "upload to a hidden file input");
+  expect((await cli("eval", "document.title")) === '"got icon.png"', "page saw the uploaded file");
+
   const consoleOut = (await cli("console"));
   expect(consoleOut?.includes("clicked 42"), "console captured page logs");
   const net = (await cli("network", "--filter", "/api/"));
@@ -177,7 +181,8 @@ try {
 } finally {
   proc.kill();
   server.close();
-  if (failures === 0 && !process.env.KEEP) rmSync(tmp, { recursive: true, force: true });
+  await sleep(1000);
+  if (failures === 0 && !process.env.KEEP) rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
   else console.log(`kept ${tmp}`);
 }
 console.log(failures ? `\n${failures} failure(s)` : "\nall passed");

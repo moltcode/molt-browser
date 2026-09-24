@@ -237,3 +237,26 @@ export function scrollPage(dy) {
   el.scrollBy({ top: dy, behavior: "instant" });
   return { ok: true };
 }
+
+// Tags the target file input so the service worker can find it from the
+// main world, where DOM.setFileInputFiles gets its object handle.
+export function markFileInput(ref, selector, mark) {
+  let el;
+  if (selector) {
+    el = document.querySelector(selector);
+  } else {
+    const state = window.__moltRefs;
+    const match = /^g(\d+):e(\d+)$/.exec(ref || "");
+    if (!match || !state || Number(match[1]) !== state.gen) {
+      return { error: "stale_ref", message: `${ref} is not from the latest snapshot. Take a new snapshot.` };
+    }
+    el = state.refs.get(ref);
+  }
+  if (el && !(el instanceof HTMLInputElement && el.type === "file")) {
+    el = el.querySelector?.("input[type=file]") || el.closest?.("label")?.querySelector("input[type=file]") || null;
+  }
+  if (!el) el = document.querySelectorAll("input[type=file]").length === 1 ? document.querySelector("input[type=file]") : null;
+  if (!el) return { error: "not_found", message: "no file input there; pass --selector 'input[type=file]'" };
+  el.setAttribute("data-molt-upload", mark);
+  return { ok: true };
+}

@@ -53,6 +53,8 @@ Act (the in-page cursor shows each action)
   type [<ref>] <text> [--clear] [--submit]
   press <key>                     Enter, Tab, Escape, ArrowDown, Backspace, a, ...
   scroll [down|up] [--pages N] | scroll --to <ref>
+  upload <ref> | --selector CSS <file>...
+                                  set files on a file input
 
 Setup
   setup                           register the native host, print install steps
@@ -253,6 +255,28 @@ func buildRequest(cmd string, rest []string, a args) (string, map[string]any, er
 		if a.has("submit") {
 			p["submit"] = true
 		}
+		return cmd, p, nil
+	case "upload":
+		if s := a.flags["selector"]; s != "" {
+			p["selector"] = s
+		} else if len(rest) > 0 && refPattern.MatchString(rest[0]) {
+			p["ref"], rest = rest[0], rest[1:]
+		}
+		if len(rest) == 0 {
+			return "", nil, fmt.Errorf("usage: molt-browser upload <ref> | --selector CSS <file>...")
+		}
+		files := make([]string, 0, len(rest))
+		for _, f := range rest {
+			abs, err := filepath.Abs(f)
+			if err != nil {
+				return "", nil, err
+			}
+			if _, err := os.Stat(abs); err != nil {
+				return "", nil, fmt.Errorf("%s: %v", f, err)
+			}
+			files = append(files, abs)
+		}
+		p["files"] = files
 		return cmd, p, nil
 	case "press":
 		if err := need(1, "<key>"); err != nil {
