@@ -6,7 +6,12 @@
 // works in background tabs), page reads go through chrome.scripting in the
 // extension's isolated world, and overlay.js draws the agent cursor, the
 // glow border and the Stop pill.
+//
+// Nothing runs without auth: drive methods need a grant signed by the Molt
+// backend this browser is paired with (auth.js), and the session a grant
+// names is the only owner tab scoping ever sees.
 
+import { AuthError, PROTOCOL, checkOffer, verifyGrant, verifyRevoke } from "./auth.js";
 
 const HOST = "com.moltcode.browser";
 const VERSION = chrome.runtime.getManifest().version;
@@ -29,12 +34,28 @@ let stopped = new Set();
 // agent's `open` silently redirect another agent's next click.
 let agentTabs = {};
 let tabOwners = {};
+// The Molt backend + user this browser answers to (auth.js), and this
+// profile's install id, which every grant must name.
+let pairing = null;
+let installId = null;
+// The one pair offer waiting for the user's Allow/Deny in pair.html.
+let pending = null;
 
-const ready = chrome.storage.session.get(["stopped", "agentTabs", "tabOwners"]).then((saved) => {
-  stopped = new Set(saved.stopped || []);
-  agentTabs = saved.agentTabs || {};
-  tabOwners = saved.tabOwners || {};
-});
+const ready = Promise.all([
+  chrome.storage.session.get(["stopped", "agentTabs", "tabOwners"]).then((saved) => {
+    stopped = new Set(saved.stopped || []);
+    agentTabs = saved.agentTabs || {};
+    tabOwners = saved.tabOwners || {};
+  }),
+  chrome.storage.local.get(["pairing", "installId"]).then(async (saved) => {
+    pairing = saved.pairing || null;
+    installId = saved.installId;
+    if (!installId) {
+      installId = crypto.randomUUID();
+      await chrome.storage.local.set({ installId });
+    }
+  }),
+]);
 
 function persist() {
   chrome.storage.session.set({ stopped: [...stopped], agentTabs, tabOwners });
@@ -54,7 +75,22 @@ function connect() {
     port = null;
     reconnectTimer = setTimeout(connect, 5000);
   });
-  port.postMessage({ type: "hello", version: VERSION, browser: browserName() });
+  sendHello();
+}
+
+// No secrets: the host and `molt-browser status` show which account this
+// browser is paired with, so Molt can tell paired, unpaired and mismatched
+// apart.
+function sendHello() {
+  ready.then(() => {
+    port?.postMessage({
+      type: "hello",
+      version: VERSION,
+      protocol: PROTOCOL,
+      browser: browserName(),
+      paired: pairing && { pair_id: pairing.pair_id, kid: pairing.kid, user_id: pairing.user_id, email: pairing.email },
+    });
+  });
 }
 
 function browserName() {
@@ -67,13 +103,20 @@ async function onHostMessage(msg) {
     bridge = { connected: true, error: null, hostVersion: msg.version };
     return;
   }
-  const { id, method, params } = msg;
+  const { id, method, params, grant } = msg;
   let reply;
   try {
     await ready;
-    const handler = handlers[method];
-    if (!handler) fail("unknown_method", `unknown method ${method}`);
-    reply = { id, ok: true, result: await handler(params || {}) };
+    let result;
+    if (Object.hasOwn(control, method)) {
+      result = await control[method](params || {});
+    } else {
+      if (!Object.hasOwn(handlers, method)) fail("unknown_method", `unknown method ${method}`);
+      const claims = await verifyGrant(grant, pairing);
+      // Tab ownership comes from the signed session, never from params.
+      result = await handlers[method]({ ...(params || {}), session: claims.session_id });
+    }
+    reply = { id, ok: true, result };
   } catch (e) {
     reply = { id, ok: false, error: { code: e.code || "error", message: e.message || String(e) } };
   }
@@ -105,7 +148,7 @@ function withTimeout(promise, ms, code, message) {
 }
 
 async function targetTab(params) {
-  const owner = params.session || "local";
+  const owner = params.session;
   let tab;
   if (params.tab != null) {
     tab = await chrome.tabs.get(params.tab).catch(() => null);
@@ -260,6 +303,7 @@ async function reattach(tabId) {
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  if (pending?.tabId === tabId) settlePending(new AuthError("pair_denied", "the pair request was closed in Chrome"));
   sessions.delete(tabId);
   if (stopped.delete(tabId)) persist();
   forgetTab(tabId);
@@ -490,7 +534,8 @@ chrome.debugger.onEvent.addListener(({ tabId }, method, params) => {
 // Methods
 // ---------------------------------------------------------------------------
 
-const handlers = {
+// Methods that run without a grant. None of them touches a page.
+const control = {
   // Picks up a new build of the unpacked extension without a trip to
   // chrome://extensions. The bridge reconnects on its own.
   async reload_extension() {
@@ -498,6 +543,66 @@ const handlers = {
     return { summary: "extension reloading; it reconnects in a few seconds" };
   },
 
+  // Molt asks to pair. The answer waits for the user's Allow in pair.html,
+  // next to the same code the desktop shows.
+  async pair_offer(params) {
+    const offer = checkOffer(params);
+    settlePending(new AuthError("pair_superseded", "a newer pair request replaced this one"));
+    const ms = offer.expires_at * 1000 - Date.now();
+    const answer = new Promise((resolve, reject) => {
+      pending = { offer, resolve, reject, timer: setTimeout(() => settlePending(new AuthError("pair_expired", "nobody answered the pair request in Chrome")), ms) };
+    });
+    const tab = await chrome.tabs.create({ url: chrome.runtime.getURL("pair.html"), active: true });
+    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+    pending.tabId = tab.id;
+    return answer;
+  },
+
+  // Molt signed out or switched accounts.
+  async unpair(params) {
+    if (!pairing) return { unpaired: false, summary: "not paired" };
+    await verifyRevoke(params.token, pairing);
+    await clearPairing();
+    return { unpaired: true, summary: "pairing removed" };
+  },
+};
+
+function settlePending(error, value) {
+  if (!pending) return;
+  const p = pending;
+  pending = null;
+  clearTimeout(p.timer);
+  if (p.tabId != null) chrome.tabs.remove(p.tabId).catch(() => {});
+  if (error) p.reject(error);
+  else p.resolve(value);
+}
+
+async function acceptPending() {
+  const { offer } = pending;
+  pairing = {
+    pair_id: offer.pair_id,
+    kid: offer.kid,
+    public_key: offer.public_key,
+    user_id: offer.user_id,
+    email: offer.email,
+    machine_id: offer.machine_id,
+    machine_name: offer.machine_name,
+    browser_install_id: installId,
+    paired_at: Date.now(),
+  };
+  await chrome.storage.local.set({ pairing });
+  sendHello();
+  settlePending(null, { accepted: true, pair_id: offer.pair_id, nonce: offer.nonce, browser_install_id: installId });
+}
+
+async function clearPairing() {
+  pairing = null;
+  await chrome.storage.local.remove("pairing");
+  for (const tabId of [...sessions.keys()]) await detach(tabId);
+  sendHello();
+}
+
+const handlers = {
   async tabs() {
     const [focused] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const tabs = await chrome.tabs.query({});
@@ -520,8 +625,8 @@ const handlers = {
     const [current] = await chrome.tabs.query({ active: true, lastFocusedWindow: true, windowType: "normal" });
     const tab = await chrome.tabs.create({ url, active: !!focus, windowId: current?.windowId });
     const loaded = waitForLoad(tab.id);
-    agentTabs[session || "local"] = tab.id;
-    tabOwners[tab.id] = session || "local";
+    agentTabs[session] = tab.id;
+    tabOwners[tab.id] = session;
     persist();
     await groupTab(tab);
     if ((await chrome.tabs.get(tab.id)).status !== "complete") await loaded;
@@ -874,7 +979,37 @@ async function groupTab(tab) {
 // Popup and overlay messages
 // ---------------------------------------------------------------------------
 
+// Pairing decisions only count from the extension's own pages; content
+// scripts report the page's URL here.
+const fromExtensionPage = (sender, page) => sender.id === chrome.runtime.id && sender.url?.startsWith(chrome.runtime.getURL(page));
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.molt === "pair_state" && fromExtensionPage(sender, "pair.html")) {
+    ready.then(() => {
+      const o = pending?.offer;
+      sendResponse({
+        offer: o && { pair_id: o.pair_id, code: o.code, email: o.email, machine_name: o.machine_name, expires_at: o.expires_at },
+        replaces: pairing && { email: pairing.email, machine_name: pairing.machine_name },
+      });
+    });
+    return true;
+  }
+  if (msg?.molt === "pair_decision" && fromExtensionPage(sender, "pair.html")) {
+    if (!pending || pending.offer.pair_id !== msg.pair_id) {
+      sendResponse({ ok: false, error: "this pair request is no longer active" });
+      return;
+    }
+    if (msg.allow) acceptPending().then(() => sendResponse({ ok: true }));
+    else {
+      settlePending(new AuthError("pair_denied", "the user declined pairing in Chrome"));
+      sendResponse({ ok: true });
+    }
+    return true;
+  }
+  if (msg?.molt === "unpair" && fromExtensionPage(sender, "popup.html")) {
+    clearPairing().then(() => sendResponse({ ok: true }));
+    return true;
+  }
   if (msg?.molt === "stop") {
     const tabId = msg.tabId ?? sender.tab?.id;
     if (tabId != null) {
@@ -896,6 +1031,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({
         bridge,
         version: VERSION,
+        pairing: pairing && { email: pairing.email, machine_name: pairing.machine_name, paired_at: pairing.paired_at },
         tab: msg.tabId == null ? null : { controlled: sessions.has(msg.tabId), stopped: stopped.has(msg.tabId) },
       });
     });

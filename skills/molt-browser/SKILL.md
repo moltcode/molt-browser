@@ -11,7 +11,11 @@ page, and the user can press **Stop** at any time. Nothing runs headless.
 
 Start with `molt-browser status`. If it says the extension is not connected,
 tell the user to install it (`molt-browser setup` prints the steps) and stop;
-don't try other browser tools.
+don't try other browser tools. If it says `not paired` or `outdated`, or a
+command fails with `unpaired`, `pair_mismatch`, `wrong_user` or `no_grant`,
+ask the user to pair Chrome from Molt Code → Plugins → Browser (Chrome) and
+stop. Chrome only takes commands from a Molt agent session whose signed-in
+Molt account matches the one it is paired with; there is no way around that.
 
 ## Loop
 

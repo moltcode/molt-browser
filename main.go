@@ -4,15 +4,22 @@
 //
 // The same binary is the native messaging host Chrome launches for the
 // extension (`molt-browser host`, or a chrome-extension:// origin argument).
+//
+// Each drive command carries a grant: a 5-minute token the Molt backend signs
+// for this agent session (MOLT_BROWSER_LEASE proves which session it is).
+// The extension verifies it against the key it was paired with, so opening
+// the socket alone drives nothing.
 package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -66,6 +73,9 @@ Act (the in-page cursor shows each action; each prints the page afterwards)
 Setup
   setup                           register the native host, print install steps
   reload-extension                reload an unpacked extension after an update
+
+  Chrome only takes commands from a Molt agent session once it is paired
+  with your Molt account: Molt Code → Plugins → Browser (Chrome) → Pair.
 
 Global flags
   --tab ID        target tab (see the default above)
@@ -143,6 +153,8 @@ func main() {
 		runSetup(written, hostErr)
 	case "status":
 		runStatus(a)
+	case "pair", "unpair":
+		runPairing(cmd, rest, a)
 	default:
 		method, params, err := buildRequest(cmd, rest, a)
 		if err != nil {
@@ -154,12 +166,8 @@ func main() {
 }
 
 func buildRequest(cmd string, rest []string, a args) (string, map[string]any, error) {
+	// No session param: the extension takes the session from the grant.
 	p := map[string]any{}
-	if session := os.Getenv("MOLT_BROWSER_SESSION"); session != "" {
-		p["session"] = session
-	} else if session := os.Getenv("MOLTCODE_SESSION_ID"); session != "" {
-		p["session"] = session
-	}
 	if a.has("allow-active") {
 		p["allow_active"] = true
 	}
@@ -389,7 +397,10 @@ type response struct {
 
 var errNotConnected = errors.New("not connected")
 
-func request(method string, params map[string]any, timeout time.Duration) (response, error) {
+// Methods the extension accepts without a grant.
+var grantFree = map[string]bool{"hello": true, "reload_extension": true, "pair_offer": true, "unpair": true}
+
+func request(method string, params map[string]any, grant string, timeout time.Duration) (response, error) {
 	var resp response
 	conn, err := net.DialTimeout("unix", socketPath(), 2*time.Second)
 	if err != nil {
@@ -398,7 +409,11 @@ func request(method string, params map[string]any, timeout time.Duration) (respo
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(timeout + 5*time.Second))
 
-	line, _ := json.Marshal(map[string]any{"method": method, "params": params, "timeout_ms": timeout.Milliseconds()})
+	req := map[string]any{"method": method, "params": params, "timeout_ms": timeout.Milliseconds()}
+	if grant != "" {
+		req["grant"] = grant
+	}
+	line, _ := json.Marshal(req)
 	if _, err := conn.Write(append(line, '\n')); err != nil {
 		return resp, err
 	}
@@ -422,8 +437,60 @@ func timeoutFlag(a args) time.Duration {
 	return 60 * time.Second
 }
 
+// fetchGrant asks the Molt backend for a grant for this agent session. The
+// backend signs only while this machine's signed-in Molt user is the one
+// Chrome is paired with.
+func fetchGrant() (string, error) {
+	url := os.Getenv("MOLT_BROWSER_GRANT_URL")
+	lease := os.Getenv("MOLT_BROWSER_LEASE")
+	session := os.Getenv("MOLTCODE_SESSION_ID")
+	if url == "" || lease == "" || session == "" {
+		return "", errors.New("no_grant: molt-browser drives Chrome only from a Molt agent session (MOLT_BROWSER_LEASE is not set)")
+	}
+	body, _ := json.Marshal(map[string]string{"session_id": session, "lease": lease})
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("no_grant: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token := os.Getenv("MOLTCODE_AUTH_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("no_grant: could not reach the Molt backend: %v", err)
+	}
+	defer resp.Body.Close()
+	var r struct {
+		Grant string `json:"grant"`
+		Error *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return "", fmt.Errorf("no_grant: bad grant response from the Molt backend (HTTP %d)", resp.StatusCode)
+	}
+	if resp.StatusCode != http.StatusOK || r.Grant == "" {
+		if r.Error != nil {
+			return "", fmt.Errorf("%s: %s", r.Error.Code, r.Error.Message)
+		}
+		return "", fmt.Errorf("no_grant: the Molt backend refused a grant (HTTP %d)", resp.StatusCode)
+	}
+	return r.Grant, nil
+}
+
 func call(method string, params map[string]any, a args) json.RawMessage {
-	resp, err := request(method, params, timeoutFlag(a))
+	grant := ""
+	if !grantFree[method] {
+		g, err := fetchGrant()
+		if err != nil {
+			fatalf("%v", err)
+		}
+		grant = g
+	}
+	resp, err := request(method, params, grant, timeoutFlag(a))
 	if errors.Is(err, errNotConnected) {
 		fatalf("the Molt Chrome extension is not connected. Open Chrome with the extension installed (molt-browser setup shows how), then retry.")
 	}
@@ -440,7 +507,7 @@ func call(method string, params map[string]any, a args) json.RawMessage {
 }
 
 func runStatus(a args) {
-	resp, err := request("hello", nil, 3*time.Second)
+	resp, err := request("hello", nil, "", 3*time.Second)
 	if err != nil {
 		if a.has("json") {
 			fmt.Println(`{"connected":false}`)
@@ -455,11 +522,61 @@ func runStatus(a args) {
 		return
 	}
 	var hello struct {
-		Version string `json:"version"`
-		Browser string `json:"browser"`
+		Version  string `json:"version"`
+		Browser  string `json:"browser"`
+		Protocol int    `json:"protocol"`
+		Paired   *struct {
+			Email string `json:"email"`
+		} `json:"paired"`
 	}
 	_ = json.Unmarshal(resp.Result, &hello)
 	fmt.Printf("extension: connected (v%s, %s)\n", hello.Version, hello.Browser)
+	switch {
+	case hello.Protocol < minProtocol:
+		fmt.Println("auth: extension is outdated and cannot check Molt auth; update it, then run molt-browser reload-extension")
+	case hello.Paired == nil:
+		fmt.Println("auth: not paired. Pair from Molt Code → Plugins → Browser (Chrome).")
+	default:
+		fmt.Printf("auth: paired with %s\n", hello.Paired.Email)
+	}
+}
+
+// pair and unpair are run by the Molt backend. A pair offer carries only
+// public data (the backend's verification key, the code the desktop shows)
+// and waits for the user's Allow in Chrome; unpair carries a revoke the
+// paired backend signed.
+func runPairing(cmd string, rest []string, a args) {
+	if len(rest) != 1 {
+		fatalf("usage: molt-browser %s <json>", cmd)
+	}
+	var params map[string]any
+	method := "pair_offer"
+	if cmd == "pair" {
+		if err := json.Unmarshal([]byte(rest[0]), &params); err != nil {
+			fatalf("pair offer is not JSON: %v", err)
+		}
+	} else {
+		method = "unpair"
+		params = map[string]any{"token": rest[0]}
+	}
+	timeout := timeoutFlag(a)
+	if _, ok := a.flags["timeout"]; !ok && cmd == "pair" {
+		timeout = 150 * time.Second
+	}
+	resp, err := request(method, params, "", timeout)
+	if errors.Is(err, errNotConnected) {
+		fatalf("not_connected: the Molt Chrome extension is not connected")
+	}
+	if err != nil {
+		fatalf("%v", err)
+	}
+	if !resp.OK {
+		if resp.Error != nil {
+			fatalf("%s: %s", resp.Error.Code, resp.Error.Message)
+		}
+		fatalf("%s failed", cmd)
+	}
+	fmt.Println(string(resp.Result))
 }
 
 func runSetup(written []string, hostErr error) {

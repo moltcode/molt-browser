@@ -5,6 +5,10 @@ package main
 // 4-byte little-endian length-prefixed JSON. The host opens a unix socket in
 // the plugin state dir; each CLI invocation connects, sends one request line
 // and reads one response line. No TCP port is ever opened.
+//
+// The host holds no secrets and makes no auth decisions beyond failing
+// closed on an extension too old to check grants: it relays each request's
+// grant untouched and the extension verifies it.
 
 import (
 	"bufio"
@@ -25,6 +29,14 @@ import (
 // Chrome refuses host-to-extension messages over 1 MB.
 const maxToExtension = 1 << 20
 
+// Extensions older than this protocol execute unsigned commands, so the
+// host refuses to drive them.
+const minProtocol = 2
+
+// Methods an outdated extension may still receive: reloading picks up the
+// updated unpacked build, which is how it stops being outdated.
+var preAuthMethods = map[string]bool{"reload_extension": true}
+
 type hostState struct {
 	out     io.Writer
 	outMu   sync.Mutex
@@ -32,6 +44,7 @@ type hostState struct {
 	mu      sync.Mutex
 	waiting map[string]chan json.RawMessage
 	hello   json.RawMessage
+	proto   int
 }
 
 func runHost() {
@@ -113,8 +126,13 @@ func (h *hostState) readExtension(r io.Reader) {
 			continue
 		}
 		if head.Type == "hello" {
+			var hello struct {
+				Protocol int `json:"protocol"`
+			}
+			_ = json.Unmarshal(buf, &hello)
 			h.mu.Lock()
 			h.hello = buf
+			h.proto = hello.Protocol
 			h.mu.Unlock()
 			log.Printf("hello %s", buf)
 			continue
@@ -146,6 +164,7 @@ func (h *hostState) send(msg []byte) error {
 type cliRequest struct {
 	Method    string          `json:"method"`
 	Params    json.RawMessage `json:"params,omitempty"`
+	Grant     string          `json:"grant,omitempty"`
 	TimeoutMs int             `json:"timeout_ms,omitempty"`
 }
 
@@ -172,6 +191,18 @@ func (h *hostState) serve(conn net.Conn) {
 		return
 	}
 
+	h.mu.Lock()
+	proto, connected := h.proto, h.hello != nil
+	h.mu.Unlock()
+	if !preAuthMethods[req.Method] && proto < minProtocol {
+		if !connected {
+			writeLine(conn, errorResponse("", "extension_not_ready", "the Molt extension has not said hello yet; retry in a moment"))
+		} else {
+			writeLine(conn, errorResponse("", "extension_outdated", "the Molt Chrome extension is too old to check Molt auth; update it (molt-browser reload-extension picks up the unpacked build)"))
+		}
+		return
+	}
+
 	id := strconv.FormatInt(h.nextID.Add(1), 10)
 	ch := make(chan json.RawMessage, 1)
 	h.mu.Lock()
@@ -182,7 +213,12 @@ func (h *hostState) serve(conn net.Conn) {
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
 	}
-	msg, _ := json.Marshal(map[string]any{"id": id, "method": req.Method, "params": params})
+	out := map[string]any{"id": id, "method": req.Method, "params": params}
+	if req.Grant != "" {
+		out["grant"] = req.Grant
+	}
+	msg, _ := json.Marshal(out)
+	// Never log the grant.
 	log.Printf("-> %s %s", id, req.Method)
 	if err := h.send(msg); err != nil {
 		h.drop(id)

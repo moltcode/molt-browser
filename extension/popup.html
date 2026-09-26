@@ -23,7 +23,8 @@
         font-weight: 600; font-size: 13px; line-height: 1; font-family: inherit; cursor: pointer;
       }
       #stop { background: #ef4444; color: white; }
-      #allow { background: #ede9fe; color: #5b21b6; }
+      #allow, #unpair { background: #ede9fe; color: #5b21b6; }
+      #unpair { margin-top: 0; }
       [hidden] { display: none !important; }
       footer { padding: 0 14px 10px; color: #9ca3af; font-size: 11px; }
     </style>
@@ -34,9 +35,12 @@
     <div id="bridge-hint" class="hint" hidden>
       Install the <b>Browser</b> plugin in Molt Code, then run <code>molt-browser setup</code> once.
     </div>
+    <div class="row"><span id="pair-dot" class="dot"></span><span id="pair"></span></div>
+    <div id="pair-hint" class="hint" hidden>Pair from Molt Code → Plugins → Browser (Chrome). Until then no agent can use this browser.</div>
     <div class="row"><span id="tab-dot" class="dot"></span><span id="tab"></span></div>
     <button id="stop" hidden>Stop the agent on this tab</button>
     <button id="allow" hidden>Let agents use this tab again</button>
+    <button id="unpair" hidden>Unpair from Molt</button>
     <footer id="version"></footer>
     <script src="popup.js"></script>
   </body>

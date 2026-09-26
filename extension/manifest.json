@@ -2,10 +2,10 @@
   "manifest_version": 3,
   "name": "Molt Code Browser",
   "short_name": "Molt",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Lets your Molt Code agents drive and debug tabs in this browser, with a visible cursor and a Stop button.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwGJ8H++atrkTtQ5m0QSV8Pk5QKIkhvisMJ1ItWa7Is/HOXhTLysoLN5qhy6HnwsIQiFe4apSj2HgtEUYXE1OS+AtU/W2i85ZYSjCtsHvwGN+DvxoeSJukz+6I4yDlOVT0ZgZ5rDnmuq7Ft+vne0Bvc6WY2GPHGsI9UvU8eDEB5pCNpZ1+f88ROzj7D2Ez5GBjFxYHDx3ZhWnfdkOMwTtinnif6jW7JBbtON/LJjJnQouRfAa2H5sIjq2saMZ5Jl0QPA5NsQndeOSN9snJhYLr+oUXah5APZ/h3swmmhDAtKsfP8uyFMGXiDDn51+zehUBfrOqiHgC5YiYCDAeMPv8wIDAQAB",
-  "minimum_chrome_version": "116",
+  "minimum_chrome_version": "137",
   "icons": {
     "16": "icons/16.png",
     "32": "icons/32.png",

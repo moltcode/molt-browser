@@ -6,9 +6,15 @@
 // (Extensions.loadUnpacked), registers the native host inside the temp
 // profile, serves a small test page, then runs the molt-browser CLI against
 // it exactly as an agent would. Your own Chrome profile is never touched.
+//
+// This process also plays the Molt backend: it holds an Ed25519 key, pairs
+// the extension (clicking Allow on pair.html) and mints grants for agent
+// sessions over the same HTTP endpoint shape the backend serves.
 import { spawn, execFile } from "node:child_process";
+import { generateKeyPairSync, randomUUID, sign as edSign } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
+import { connect as netConnect } from "node:net";
 import { tmpdir, platform, arch } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -55,7 +61,35 @@ const form = `<!doctype html><title>Form</title><body style="font:16px sans-seri
 <button id=pick onclick="const i=document.createElement('input');i.type='file';i.onchange=()=>{window.picked=i.files[0].name};i.click()">Pick file</button>
 <button onclick="const $=(id)=>document.getElementById(id);window.result={email:$('email').value,role:$('role').value,plan:$('plan').textContent,agree:$('agree').checked,avatar:$('avatar').files[0]?.name,picked:window.picked}">Submit</button>
 </body>`;
+// The fake backend's signing key and pairing.
+const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+const rawPublic = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("base64url");
+const pair = { pair_id: randomUUID(), kid: "k1", user_id: "user-1", machine_id: "machine-1", browser_install_id: null };
+const signToken = (claims) => {
+  const body = Buffer.from(JSON.stringify(claims)).toString("base64url");
+  return `${body}.${edSign(null, Buffer.from(body), privateKey).toString("base64url")}`;
+};
+const mint = (session_id, extra = {}, scope = "drive") => {
+  const now = Math.floor(Date.now() / 1000);
+  return signToken({ v: 1, aud: "molt-browser", scope, ...pair, session_id, iat: now, exp: now + 300, ...extra });
+};
+const leaseFor = (session) => `lease-${session}`;
+
 const server = createServer((req, res) => {
+  if (req.url === "/grant" && req.method === "POST") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      const { session_id, lease } = JSON.parse(body);
+      res.setHeader("content-type", "application/json");
+      if (!pair.browser_install_id || lease !== leaseFor(session_id)) {
+        res.statusCode = 403;
+        return res.end(JSON.stringify({ error: { code: "bad_lease", message: "no grant" } }));
+      }
+      res.end(JSON.stringify({ grant: mint(session_id) }));
+    });
+    return;
+  }
   if (req.url === "/api/ping") return res.end(JSON.stringify({ pong: true }));
   if (req.url === "/form") {
     res.setHeader("content-type", "text/html");
@@ -112,16 +146,26 @@ const cdp = (method, params = {}, sessionId) =>
   });
 
 let failures = 0;
+const sessionEnv = (session) => ({ MOLTCODE_SESSION_ID: session, MOLT_BROWSER_LEASE: leaseFor(session), MOLT_BROWSER_GRANT_URL: `${base}/grant` });
 // Async on purpose: the test page is served from this process.
-const runCli = (args, extraEnv = {}) =>
+const runCli = (args, extraEnv = sessionEnv("e2e-main"), timeout = 30000) =>
   new Promise((resolve) => {
-    execFile(bin, args, { env: { ...env, ...extraEnv }, encoding: "utf8", timeout: 30000 }, (err, stdout, stderr) => {
+    execFile(bin, args, { env: { ...env, ...extraEnv }, encoding: "utf8", timeout }, (err, stdout, stderr) => {
       console.log(`$ molt-browser ${args.join(" ")}\n${(stdout + stderr).trim()}\n`);
       resolve(err ? null : stdout.trim());
     });
   });
 const cli = (...args) => runCli(args);
-const cliAs = (session, ...args) => runCli(args, { MOLT_BROWSER_SESSION: session });
+const cliAs = (session, ...args) => runCli(args, sessionEnv(session));
+// A raw socket client, the way any same-user process could talk to the host.
+const raw = (req) =>
+  new Promise((resolve) => {
+    const sock = netConnect(join(state, "bridge.sock"));
+    let out = "";
+    sock.on("data", (c) => (out += c));
+    sock.on("end", () => resolve(JSON.parse(out)));
+    sock.write(JSON.stringify(req) + "\n");
+  });
 const expect = (ok, what) => {
   console.log(ok ? `ok   ${what}` : `FAIL ${what}`);
   if (!ok) failures++;
@@ -146,6 +190,37 @@ try {
     status = (await cli("status"));
   }
   expect(status?.includes("connected ("), "bridge connects");
+  expect(status?.includes("not paired"), "status reports an unpaired extension");
+
+  // Nothing drives an unpaired browser, grant or not.
+  expect((await raw({ method: "tabs" })).error?.code === "unpaired", "raw socket command is rejected before pairing");
+  expect((await raw({ method: "tabs", grant: mint("x") })).error?.code === "unpaired", "a grant is useless before pairing");
+  expect((await runCli(["tabs"], {})) === null, "the CLI outside a Molt session has no grant");
+
+  // Pair: Molt sends the offer, the user clicks Allow on pair.html.
+  const offer = { ...pair, nonce: randomUUID(), public_key: rawPublic, code: "482913", email: "e2e@molt.test", machine_name: "e2e", expires_at: Math.floor(Date.now() / 1000) + 120 };
+  delete offer.browser_install_id;
+  const paired = runCli(["pair", JSON.stringify(offer)], {}, 60000);
+  let pairTarget;
+  for (let i = 0; i < 40 && !pairTarget; i++) {
+    await sleep(250);
+    pairTarget = (await cdp("Target.getTargets")).targetInfos.find((t) => t.url.endsWith("/pair.html"));
+  }
+  expect(!!pairTarget, "a pair offer opens pair.html");
+  const { sessionId: pairSession } = await cdp("Target.attachToTarget", { targetId: pairTarget.targetId, flatten: true });
+  await sleep(500);
+  const shown = await cdp("Runtime.evaluate", { expression: "document.getElementById('code').textContent", returnByValue: true }, pairSession);
+  expect(shown.result.value === "482 913", "pair.html shows the desktop's code");
+  await cdp("Runtime.evaluate", { expression: "document.getElementById('allow').click()" }, pairSession);
+  const ack = JSON.parse((await paired) || "{}");
+  expect(ack.accepted && ack.nonce === offer.nonce && ack.pair_id === pair.pair_id && ack.browser_install_id, "Allow acks the offer with this browser's install id");
+  pair.browser_install_id = ack.browser_install_id;
+  expect((await cli("status"))?.includes("paired with e2e@molt.test"), "status shows the paired account");
+
+  expect((await raw({ method: "tabs" })).error?.code === "no_grant", "raw socket command without a grant is rejected after pairing");
+  expect((await raw({ method: "tabs", grant: mint("x", { user_id: "user-2" }) })).error?.code === "wrong_user", "a grant for another user is rejected");
+  expect((await raw({ method: "tabs", grant: mint("x", { iat: 1, exp: 100 }) })).error?.code === "grant_expired", "an expired grant is rejected");
+  expect((await raw({ method: "tabs", grant: mint("x") })).ok === true, "a valid grant drives");
   expect((await cli("snapshot")) === null, "no agent tab never falls back to the user's foreground tab");
 
   if (!process.env.FORM_ONLY) {
@@ -256,9 +331,24 @@ try {
   const tabA2 = (await cliAs("session-a", "open", `${base}/form`))?.match(/tab (\d+)/)?.[1];
   expect(tabA2 && tabA2 !== tabA, "a session can open a second tab");
   expect((await cliAs("session-b", "snapshot", "--tab", tabA)) === null, "the first tab stays owned after a second open");
+  const spoof = await raw({ method: "snapshot", params: { tab: Number(tabA), session: "session-a" }, grant: mint("session-b") });
+  expect(spoof.error?.code === "tab_in_use", "a spoofed params.session cannot claim another session's tab");
   await cliAs("session-a", "release", "--tab", tabA);
   await cliAs("session-a", "release", "--tab", tabA2);
   await cliAs("session-b", "release");
+
+  // Sign-out in Molt: a signed revoke drops the pairing, and old grants die.
+  const oldGrant = mint("e2e-main");
+  const now = Math.floor(Date.now() / 1000);
+  const revokeClaims = { v: 1, aud: "molt-browser", scope: "revoke", ...pair, iat: now, exp: now + 300 };
+  const intruder = generateKeyPairSync("ed25519").privateKey;
+  const forgedBody = Buffer.from(JSON.stringify(revokeClaims)).toString("base64url");
+  const forged = `${forgedBody}.${edSign(null, Buffer.from(forgedBody), intruder).toString("base64url")}`;
+  expect((await raw({ method: "unpair", params: { token: forged } })).error?.code === "bad_grant", "a revoke signed by another key is rejected");
+  expect((await cli("unpair", mint("e2e-main"))) === null, "a drive grant cannot unpair");
+  const revoke = signToken(revokeClaims);
+  expect((await cli("unpair", revoke))?.includes('"unpaired":true'), "a signed revoke unpairs");
+  expect((await raw({ method: "tabs", grant: oldGrant })).error?.code === "unpaired", "a grant from before sign-out is dead");
 } finally {
   proc.kill();
   server.close();

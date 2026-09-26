@@ -9,6 +9,14 @@ async function render() {
   $("bridge").textContent = connected ? "Connected to Molt Code" : "Molt Code is not connected";
   $("bridge-hint").hidden = connected;
 
+  const paired = state.pairing;
+  $("pair-dot").className = `dot ${paired ? "ok" : "bad"}`;
+  $("pair").textContent = paired
+    ? `Paired with ${paired.email || "Molt"}${paired.machine_name ? ` on ${paired.machine_name}` : ""}`
+    : "Not paired with a Molt account";
+  $("pair-hint").hidden = !!paired;
+  $("unpair").hidden = !paired;
+
   const t = state.tab || {};
   $("tab-dot").className = `dot ${t.controlled ? "busy" : t.stopped ? "bad" : ""}`;
   $("tab").textContent = t.controlled
@@ -22,6 +30,10 @@ async function render() {
 
   $("stop").onclick = async () => {
     await chrome.runtime.sendMessage({ molt: "stop", tabId: tab.id });
+    render();
+  };
+  $("unpair").onclick = async () => {
+    await chrome.runtime.sendMessage({ molt: "unpair" });
     render();
   };
   $("allow").onclick = async () => {

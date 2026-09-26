@@ -20,6 +20,7 @@ check:
 	go vet ./...
 	go test ./...
 	@for f in extension/*.js; do node --check $$f || exit 1; done
+	node --no-warnings --test test/*.test.mjs
 	@test "$(VERSION)" = "$(EXT_VERSION)" || (echo "package.json $(VERSION) != extension $(EXT_VERSION)"; exit 1)
 
 # out/: the npm-layout plugin tarball (package/ root), the extension zip for

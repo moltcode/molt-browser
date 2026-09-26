@@ -33,12 +33,43 @@ listens on a private socket in Molt's plugin state directory.
      `chrome://extensions`, turn on Developer mode, click **Load unpacked**
      and pick that folder. The extension id is always
      `gajikdfpamklabiiaonmdeamjabehoig`.
-3. `molt-browser status` should print `extension: connected`.
+3. Pair it: **Plugins → Browser (Chrome) → Pair Chrome** in Molt Code. Chrome
+   opens a page with the same 6-digit code the desktop shows; click
+   **Allow**. `molt-browser status` should print `extension: connected` and
+   `auth: paired with <you>`.
+
+## Auth
+
+Opening the bridge socket drives nothing. The extension is paired with one
+Molt backend and the platform account signed in there, and it runs a
+command only when the command carries a grant that backend signed:
+
+- **Pairing** stores the backend's Ed25519 *public* key in the extension.
+  The private key stays with the backend, so nothing in the Chrome profile
+  can mint grants. A second pairing replaces the first only after you
+  approve it in Chrome.
+- **Grants** are signed for one Molt agent session and live 5 minutes. The
+  CLI fetches a fresh one per command with the session's
+  `MOLT_BROWSER_LEASE`; the backend signs only while its signed-in user is
+  the paired one. The extension checks signature, pairing, user, machine,
+  browser profile, audience, scope and expiry before any handler runs, and
+  the session in the grant is the only one tab ownership sees.
+- **Sign-out or account switch** in Molt rotates the backend key (every
+  lease and outstanding grant dies with it) and pushes a signed unpair when
+  Chrome is connected. If Chrome was closed at the time, a grant already in
+  flight stays valid until it expires, at most 5 minutes. **Unpair** in the
+  toolbar popup drops the pairing immediately.
+- The host is a pipe: it relays grants, never logs them, and refuses to
+  drive an extension older than protocol 2.
+
+This stops any process that can open the socket from driving Chrome. It
+does not defend against malware that already runs as you and can read the
+backend's data directory.
 
 ## Commands
 
 ```
-molt-browser status | setup | tabs
+molt-browser status | setup | tabs | reload-extension
 molt-browser open <url> [--focus] | navigate <url> | back | forward | reload | focus | release
 molt-browser snapshot [--limit N] [--offset N] [--all]
 molt-browser text [--max N] | screenshot [--out FILE]
