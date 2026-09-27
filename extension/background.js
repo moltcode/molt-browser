@@ -13,6 +13,7 @@
 // the only owner tab scoping ever sees.
 
 import { AuthError, PLATFORM_URL, PROTOCOL, VERIFIED, checkConnection, sameId, verifyGrant, verifyRevoke } from "./auth.js";
+import { extensionUpdate } from "./update.js";
 
 const HOST = "com.moltcode.browser";
 const VERSION = chrome.runtime.getManifest().version;
@@ -23,8 +24,17 @@ const IDLE_MS = 15 * 1000;
 const RING = 500;
 
 let port = null;
-let bridge = { connected: false, error: null, hostVersion: null };
+let bridge = { connected: false, error: null, hostVersion: null, minProtocol: null };
 let reconnectTimer = null;
+// Chrome holds a downloaded update while the service worker lives, and the
+// native port keeps it alive; it is applied once no agent is mid-action.
+let updatePending = false;
+// Unpacked builds update by reloading from disk; store builds by an update
+// check against the Chrome Web Store.
+const unpacked = chrome.management
+  .getSelf()
+  .then((self) => self.installType === "development")
+  .catch(() => false);
 
 // tabId -> { console: [], network: Map, captures: Map, lastCapture, cursor, lastUsed }
 const sessions = new Map();
@@ -92,8 +102,9 @@ function connect() {
   port = chrome.runtime.connectNative(HOST);
   port.onMessage.addListener(onHostMessage);
   port.onDisconnect.addListener(() => {
-    bridge = { connected: false, error: chrome.runtime.lastError?.message || "bridge closed", hostVersion: null };
+    bridge = { connected: false, error: chrome.runtime.lastError?.message || "bridge closed", hostVersion: null, minProtocol: null };
     port = null;
+    showUpdate();
     if (connecting?.state === "waiting") connecting = { ...connecting, state: "failed", error: "The Molt app bridge closed; try again." };
     reconnectTimer = setTimeout(connect, 5000);
   });
@@ -122,7 +133,8 @@ function browserName() {
 
 async function onHostMessage(msg) {
   if (msg.type === "ready") {
-    bridge = { connected: true, error: null, hostVersion: msg.version };
+    bridge = { connected: true, error: null, hostVersion: msg.version, minProtocol: msg.min_protocol ?? null };
+    showUpdate();
     return;
   }
   const { id, method, params, grant } = msg;
@@ -149,9 +161,54 @@ chrome.runtime.onStartup.addListener(connect);
 chrome.runtime.onInstalled.addListener(connect);
 chrome.alarms.create("molt-reconnect", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "molt-reconnect") connect();
+  if (alarm.name !== "molt-reconnect") return;
+  connect();
+  applyPendingUpdate();
+});
+chrome.runtime.onUpdateAvailable.addListener(() => {
+  updatePending = true;
+  applyPendingUpdate();
 });
 connect();
+
+// ---------------------------------------------------------------------------
+// Updates
+// ---------------------------------------------------------------------------
+
+const currentUpdate = () => extensionUpdate(bridge, { version: VERSION, protocol: PROTOCOL });
+
+// A "!" on the toolbar icon when the Molt app expects a newer build: red when
+// the bridge refuses this one, amber when it still works.
+function showUpdate() {
+  const update = currentUpdate();
+  chrome.action.setBadgeText({ text: update ? "!" : "" });
+  chrome.action.setTitle({ title: update ? `Molt Code: update this extension to v${update.expected}` : "Molt Code" });
+  if (!update) return;
+  const required = update.state === "required";
+  chrome.action.setBadgeBackgroundColor({ color: required ? "#e5484d" : "#ffc53d" });
+  chrome.action.setBadgeTextColor({ color: required ? "#ffffff" : "#1c2024" });
+}
+
+function applyPendingUpdate() {
+  if (updatePending && sessions.size === 0) chrome.runtime.reload();
+}
+
+// Unpacked: reload, which picks up the build on disk. Store: ask the Web
+// Store; a found update downloads and applies once agents are idle.
+async function updateExtension() {
+  if (await unpacked) {
+    setTimeout(() => chrome.runtime.reload(), 100);
+    return { summary: "extension reloading; it reconnects in a few seconds" };
+  }
+  const { status } = await chrome.runtime.requestUpdateCheck();
+  if (status === "update_available") {
+    updatePending = true;
+    return { summary: "downloading the update from the Chrome Web Store; the extension reloads once agents are idle" };
+  }
+  if (status === "throttled") fail("update_throttled", "Chrome is limiting update checks; try again in a few minutes.");
+  const expected = currentUpdate()?.expected;
+  fail("no_update", `The Chrome Web Store does not have ${expected ? `v${expected}` : "a newer build"} yet; try again later.`);
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -557,11 +614,10 @@ chrome.debugger.onEvent.addListener(({ tabId }, method, params) => {
 
 // Methods that run without a grant. None of them touches a page.
 const control = {
-  // Picks up a new build of the unpacked extension without a trip to
-  // chrome://extensions. The bridge reconnects on its own.
+  // Picks up a new build without a trip to chrome://extensions: the unpacked
+  // build from disk, or the Web Store's. The bridge reconnects on its own.
   async reload_extension() {
-    setTimeout(() => chrome.runtime.reload(), 100);
-    return { summary: "extension reloading; it reconnects in a few seconds" };
+    return updateExtension();
   },
 
   // The Molt app's answer to our connect request, after the user allowed it
@@ -1117,6 +1173,7 @@ const popupActions = {
   connect: async () => requestConnect(),
   cancel_connect: async () => cancelConnect(),
   disconnect: clearPairing,
+  update: updateExtension,
 };
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -1154,11 +1211,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (msg?.molt === "state") {
-    ready.then(() => {
+    ready.then(async () => {
       if (!port) connect();
       sendResponse({
         bridge,
         version: VERSION,
+        update: currentUpdate(),
+        updatePending,
+        unpacked: await unpacked,
         account: account && { email: account.user.email, name: account.user.name },
         pairing: pairing && { email: pairing.email, machine_name: pairing.machine_name, paired_at: pairing.paired_at },
         connecting: connecting && { state: connecting.state, error: connecting.error || null },

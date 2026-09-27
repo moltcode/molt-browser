@@ -81,9 +81,10 @@ func runHost() {
 	}
 	_ = os.Chmod(sock, 0o600)
 
-	// Tells the extension the bridge is actually up; a missing host only shows
-	// up as a disconnect on the extension side.
-	ready, _ := json.Marshal(map[string]any{"type": "ready", "version": version, "pid": os.Getpid()})
+	// Tells the extension the bridge is actually up (a missing host only shows
+	// up as a disconnect on the extension side) and which extension version
+	// and protocol this plugin expects.
+	ready, _ := json.Marshal(map[string]any{"type": "ready", "version": version, "min_protocol": minProtocol, "pid": os.Getpid()})
 	if err := h.send(ready); err != nil {
 		log.Printf("ready: %v", err)
 	}
@@ -93,6 +94,16 @@ func runHost() {
 		h.readExtension(os.Stdin)
 		close(done)
 	}()
+	updated := make(chan struct{})
+	if exe, err := os.Executable(); err == nil {
+		launcher := filepath.Join(state, "native-host")
+		go func() {
+			if h.watchInstall(func() string { return installFingerprint(exe, launcher) }, 5*time.Second, done) {
+				log.Printf("plugin updated on disk, exiting so Chrome starts the new host")
+				close(updated)
+			}
+		}()
+	}
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -103,8 +114,11 @@ func runHost() {
 		}
 	}()
 
-	<-done
-	log.Printf("extension disconnected, exiting")
+	select {
+	case <-done:
+		log.Printf("extension disconnected, exiting")
+	case <-updated:
+	}
 	ln.Close()
 	// Only remove the socket if it is still ours.
 	if fi, err := os.Stat(sock); err == nil && fi.Mode()&os.ModeSocket != 0 {
@@ -269,7 +283,7 @@ func (h *hostState) serve(conn net.Conn) {
 		if !connected {
 			writeLine(conn, errorResponse("", "extension_not_ready", "the Molt extension has not said hello yet; retry in a moment"))
 		} else {
-			writeLine(conn, errorResponse("", "extension_outdated", "the Molt Chrome extension is too old to check Molt auth; update it (molt-browser reload-extension picks up the unpacked build)"))
+			writeLine(conn, errorResponse("", "extension_outdated", fmt.Sprintf("the Molt Chrome extension is too old to check Molt auth; Molt expects v%s. Update it (molt-browser reload-extension picks up the unpacked build)", version)))
 		}
 		return
 	}

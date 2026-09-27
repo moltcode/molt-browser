@@ -2,7 +2,7 @@ const $ = (id) => document.getElementById(id);
 const show = (id, on) => ($(id).hidden = !on);
 
 // Popup actions run in the service worker; errors come back as text.
-const actionError = { account: null, connect: null };
+const actionError = { account: null, connect: null, update: null };
 
 async function act(molt, slot) {
   actionError[slot] = null;
@@ -26,6 +26,26 @@ async function render() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const s = await chrome.runtime.sendMessage({ molt: "state", tabId: tab?.id });
   $("version").textContent = `v${s.version}${s.bridge.hostVersion ? ` · bridge ${s.bridge.hostVersion}` : ""}`;
+
+  // Molt expects a newer build of this extension.
+  const u = s.update;
+  show("update", !!u);
+  if (u) {
+    $("update").className = `update${u.state === "required" ? " required" : ""}`;
+    detail(
+      "update-detail",
+      u.state === "required" ? "Molt needs extension " : "Molt expects extension ",
+      `v${u.expected}`,
+      u.state === "required"
+        ? `. This is v${s.version}, which agents cannot use until it is updated.`
+        : `. This is v${s.version}; agents still work, but update to get the fixes.`
+    );
+    $("update-button").textContent = s.unpacked ? "Reload extension" : "Update extension";
+    $("update-button").disabled = s.updatePending;
+    const note = actionError.update || (s.updatePending ? "Downloading; the extension reloads once agents are idle." : null);
+    show("update-note", !!note);
+    $("update-note").textContent = note || "";
+  }
 
   // 1. Bridge
   const bridged = s.bridge.connected;
@@ -89,6 +109,7 @@ $("sign-out").onclick = () => act("sign_out", "account");
 $("connect").onclick = () => act("connect", "connect");
 $("cancel").onclick = () => act("cancel_connect", "connect");
 $("disconnect").onclick = () => act("disconnect", "connect");
+$("update-button").onclick = () => act("update", "update");
 
 render();
 // The bridge connects and the Molt app answers while the popup is open.

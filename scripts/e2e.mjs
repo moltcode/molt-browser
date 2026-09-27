@@ -256,8 +256,12 @@ try {
   };
   await swEval(`chrome.storage.local.set({ platformUrl: ${JSON.stringify(base)} })`);
   // The popup's steps: signed in, Connect enabled.
-  const { targetId: popupTarget } = await cdp("Target.createTarget", { url: `chrome-extension://${extId}/popup.html` });
-  const { sessionId: popup } = await cdp("Target.attachToTarget", { targetId: popupTarget, flatten: true });
+  let popupTarget, popup;
+  const openPopup = async () => {
+    ({ targetId: popupTarget } = await cdp("Target.createTarget", { url: `chrome-extension://${extId}/popup.html` }));
+    ({ sessionId: popup } = await cdp("Target.attachToTarget", { targetId: popupTarget, flatten: true }));
+  };
+  await openPopup();
   const inPopup = async (expression) =>
     (await cdp("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, popup)).result?.value;
   // SHOTS=dir saves the popup at each step.
@@ -268,8 +272,8 @@ try {
     mkdirSync(process.env.SHOTS, { recursive: true });
     writeFileSync(join(process.env.SHOTS, `${name}.png`), Buffer.from(data, "base64"));
   };
-  const waitPopup = async (expression) => {
-    for (let i = 0; i < 20; i++) {
+  const waitPopup = async (expression, tries = 20) => {
+    for (let i = 0; i < tries; i++) {
       if (await inPopup(expression)) return true;
       await sleep(250);
     }
@@ -470,6 +474,29 @@ try {
   const revoke = signToken(revokeClaims);
   expect((await cli("unpair", revoke))?.includes('"unpaired":true'), "a signed revoke unpairs");
   expect((await raw({ method: "tabs", grant: oldGrant })).error?.code === "unpaired", "a grant from before sign-out is dead");
+
+  // The plugin updates under a running Chrome: a newer CLI rewrites the
+  // launcher, the old host exits, Chrome starts the new one, and both the
+  // CLI and the extension say the extension is older than Molt expects.
+  const next = join(tmp, "next", "molt-browser");
+  mkdirSync(join(tmp, "next"), { recursive: true });
+  await new Promise((r, j) =>
+    execFile("go", ["build", "-ldflags", "-X main.version=9.9.9", "-o", next, "."], { cwd: root }, (e) => (e ? j(e) : r()))
+  );
+  const statusJson = async (exe) =>
+    new Promise((r) => execFile(exe, ["status", "--json"], { env }, (_e, out) => r(JSON.parse(out || "{}"))));
+  await openPopup();
+  const updated = await statusJson(next);
+  expect(updated.update === "available" && updated.expected?.version === "9.9.9", "a newer plugin reports the extension as outdated");
+  expect(await waitPopup(`!document.getElementById("update").hidden && document.getElementById("update-detail").textContent.includes("v9.9.9")`, 120), "the popup says Molt expects the newer extension");
+  expect((await inPopup(`document.getElementById("update-button").textContent`)) === "Reload extension", "an unpacked build offers a reload");
+  expect((await swEval(`chrome.action.getBadgeText({})`)) === "!", "the toolbar icon carries the update badge");
+  await shot("6-update-available");
+  // Back to the matching plugin: the notice clears.
+  expect((await statusJson(bin)).update === "none", "the matching plugin sees no update");
+  expect(await waitPopup(`document.getElementById("update").hidden`, 120), "the popup notice clears once the plugin matches again");
+  expect((await swEval(`chrome.action.getBadgeText({})`)) === "", "the badge clears");
+  await cdp("Target.closeTarget", { targetId: popupTarget });
 } finally {
   proc.kill();
   server.close();

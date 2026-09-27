@@ -511,19 +511,17 @@ func call(method string, params map[string]any, a args) json.RawMessage {
 }
 
 func runStatus(a args) {
+	expected := map[string]any{"version": version, "min_protocol": minProtocol}
 	resp, err := request("hello", nil, "", 3*time.Second)
 	if err != nil {
 		if a.has("json") {
-			fmt.Println(`{"connected":false}`)
+			b, _ := json.Marshal(map[string]any{"connected": false, "expected": expected})
+			fmt.Println(string(b))
 		} else {
 			fmt.Println("extension: not connected")
 			fmt.Println("Chrome must be running with the Molt extension. Run `molt-browser setup` for install steps.")
 		}
 		os.Exit(1)
-	}
-	if a.has("json") {
-		fmt.Printf("{\"connected\":true,\"extension\":%s}\n", resp.Result)
-		return
 	}
 	var hello struct {
 		Version  string `json:"version"`
@@ -534,10 +532,23 @@ func runStatus(a args) {
 		} `json:"paired"`
 	}
 	_ = json.Unmarshal(resp.Result, &hello)
+	update := updateNone
+	// An empty hello means the extension has not introduced itself yet.
+	if hello.Version != "" {
+		update = extensionUpdate(hello.Version, hello.Protocol)
+	}
+	if a.has("json") {
+		b, _ := json.Marshal(map[string]any{"connected": true, "extension": resp.Result, "expected": expected, "update": update})
+		fmt.Println(string(b))
+		return
+	}
 	fmt.Printf("extension: connected (v%s, %s)\n", hello.Version, hello.Browser)
+	if update == updateAvailable {
+		fmt.Printf("update: Molt expects extension v%s; update it in Chrome (molt-browser reload-extension picks up the unpacked build)\n", version)
+	}
 	switch {
-	case hello.Protocol < minProtocol:
-		fmt.Println("auth: extension is outdated and cannot check Molt auth; update it, then run molt-browser reload-extension")
+	case update == updateRequired:
+		fmt.Printf("auth: extension is outdated and cannot check Molt auth; update it to v%s, then run molt-browser reload-extension\n", version)
 	case hello.Paired == nil:
 		fmt.Println("auth: not connected. In Chrome, open the Molt extension, sign in and click Connect.")
 	default:
