@@ -19,8 +19,9 @@ func fakeExtension(t *testing.T, protocol int) *hostState {
 	t.Helper()
 	toExt, hostOut := io.Pipe()
 	hostIn, fromExt := io.Pipe()
-	h := &hostState{out: hostOut, waiting: map[string]chan json.RawMessage{}}
+	h := newHostState(hostOut)
 	go h.readExtension(hostIn)
+	extensionOut = fromExt
 
 	hello, _ := json.Marshal(map[string]any{"type": "hello", "version": "test", "protocol": protocol})
 	binary.Write(fromExt, binary.LittleEndian, uint32(len(hello)))
@@ -59,6 +60,14 @@ func fakeExtension(t *testing.T, protocol int) *hostState {
 	return h
 }
 
+// extensionOut writes framed messages as the fake extension.
+var extensionOut io.Writer
+
+func fromExtension(msg string) {
+	binary.Write(extensionOut, binary.LittleEndian, uint32(len(msg)))
+	extensionOut.Write([]byte(msg))
+}
+
 func roundTrip(t *testing.T, h *hostState, line string) string {
 	t.Helper()
 	cli, srv := net.Pipe()
@@ -74,17 +83,18 @@ func roundTrip(t *testing.T, h *hostState, line string) string {
 // A CLI connection gets the matching response back as one line, and the
 // grant reaches the extension untouched.
 func TestHostRoundTrip(t *testing.T) {
-	h := fakeExtension(t, 2)
+	h := fakeExtension(t, 3)
 	line := roundTrip(t, h, `{"method":"tabs","params":{"tab":3},"grant":"abc.def"}`)
 	if !strings.Contains(line, `"echo":"tabs"`) || !strings.Contains(line, `"tab":3`) || !strings.Contains(line, `"grant":"abc.def"`) {
 		t.Fatalf("unexpected response %s", line)
 	}
 }
 
-// Protocol 1 extensions run unsigned commands; the host refuses to drive them
-// except for the reload that updates them.
+// Protocol 1 extensions run unsigned commands and protocol 2 trusts a pairing
+// the platform never verified; the host refuses to drive either except for
+// the reload that updates them.
 func TestHostFailsClosedOnOutdatedExtension(t *testing.T) {
-	h := fakeExtension(t, 1)
+	h := fakeExtension(t, 2)
 	if line := roundTrip(t, h, `{"method":"eval","params":{"expression":"1"},"grant":"x.y"}`); !strings.Contains(line, "extension_outdated") {
 		t.Fatalf("outdated extension was driven: %s", line)
 	}
@@ -93,8 +103,41 @@ func TestHostFailsClosedOnOutdatedExtension(t *testing.T) {
 	}
 }
 
+// The extension's connect request waits in the host until one watcher takes
+// it; a cancel clears it; an idle watch times out empty.
+func TestHostConnectRequest(t *testing.T) {
+	h := fakeExtension(t, 3)
+	if line := roundTrip(t, h, `{"method":"next_connect","timeout_ms":50}`); strings.TrimSpace(line) != `{"ok":true,"result":{}}` {
+		t.Fatalf("idle watch: %s", line)
+	}
+
+	got := make(chan string, 1)
+	go func() { got <- roundTrip(t, h, `{"method":"next_connect","timeout_ms":2000}`) }()
+	time.Sleep(20 * time.Millisecond)
+	fromExtension(`{"type":"connect_request","request":{"request_id":"r1","user":{"id":"u1"}}}`)
+	select {
+	case line := <-got:
+		if !strings.Contains(line, `"request":{"request_id":"r1"`) {
+			t.Fatalf("watch did not get the request: %s", line)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("watch never woke up")
+	}
+	// Taken once.
+	if line := roundTrip(t, h, `{"method":"next_connect","timeout_ms":50}`); strings.Contains(line, "r1") {
+		t.Fatalf("request delivered twice: %s", line)
+	}
+
+	fromExtension(`{"type":"connect_request","request":{"request_id":"r2"}}`)
+	fromExtension(`{"type":"connect_cancel"}`)
+	time.Sleep(20 * time.Millisecond)
+	if line := roundTrip(t, h, `{"method":"next_connect","timeout_ms":50}`); strings.Contains(line, "r2") {
+		t.Fatalf("cancelled request delivered: %s", line)
+	}
+}
+
 func TestHostRejectsBeforeHello(t *testing.T) {
-	h := &hostState{out: io.Discard, waiting: map[string]chan json.RawMessage{}}
+	h := newHostState(io.Discard)
 	if line := roundTrip(t, h, `{"method":"tabs"}`); !strings.Contains(line, "extension_not_ready") {
 		t.Fatalf("request before hello was forwarded: %s", line)
 	}
@@ -149,7 +192,7 @@ func TestFetchGrant(t *testing.T) {
 }
 
 func TestHostRejectsOversizedRequest(t *testing.T) {
-	h := &hostState{out: io.Discard, waiting: map[string]chan json.RawMessage{}}
+	h := newHostState(io.Discard)
 	if err := h.send(make([]byte, maxToExtension+1)); err == nil {
 		t.Fatal("expected the 1 MB limit to be enforced")
 	}

@@ -8,7 +8,9 @@ package main
 //
 // The host holds no secrets and makes no auth decisions beyond failing
 // closed on an extension too old to check grants: it relays each request's
-// grant untouched and the extension verifies it.
+// grant untouched and the extension verifies it. It also holds the
+// extension's one pending connect request until the Molt app picks it up
+// (`molt-browser watch`); the request carries nothing secret.
 
 import (
 	"bufio"
@@ -29,9 +31,13 @@ import (
 // Chrome refuses host-to-extension messages over 1 MB.
 const maxToExtension = 1 << 20
 
-// Extensions older than this protocol execute unsigned commands, so the
-// host refuses to drive them.
-const minProtocol = 2
+// Extensions older than this protocol either execute unsigned commands or
+// trust a pairing the platform never verified, so the host refuses to drive
+// them.
+const minProtocol = 3
+
+// How long `molt-browser watch` waits for a connect request by default.
+const defaultWatch = 50 * time.Second
 
 // Methods an outdated extension may still receive: reloading picks up the
 // updated unpacked build, which is how it stops being outdated.
@@ -45,6 +51,10 @@ type hostState struct {
 	waiting map[string]chan json.RawMessage
 	hello   json.RawMessage
 	proto   int
+	// The extension's pending connect request and a channel closed whenever
+	// it changes, for `next_connect` waiters.
+	connect json.RawMessage
+	changed chan struct{}
 }
 
 func runHost() {
@@ -58,7 +68,7 @@ func runHost() {
 	}
 	log.Printf("host start pid=%d args=%v", os.Getpid(), os.Args[1:])
 
-	h := &hostState{out: os.Stdout, waiting: map[string]chan json.RawMessage{}}
+	h := newHostState(os.Stdout)
 
 	sock := socketPath()
 	// A newer host takes the socket over; the previous one keeps serving its
@@ -106,6 +116,39 @@ func runHost() {
 	}
 }
 
+func newHostState(out io.Writer) *hostState {
+	return &hostState{out: out, waiting: map[string]chan json.RawMessage{}, changed: make(chan struct{})}
+}
+
+// setConnect replaces the pending connect request (nil clears it) and wakes
+// every waiter. Callers hold h.mu.
+func (h *hostState) setConnect(req json.RawMessage) {
+	h.connect = req
+	close(h.changed)
+	h.changed = make(chan struct{})
+}
+
+// takeConnect waits up to timeout for a connect request and hands it to
+// exactly one caller.
+func (h *hostState) takeConnect(timeout time.Duration) json.RawMessage {
+	deadline := time.After(timeout)
+	for {
+		h.mu.Lock()
+		if req := h.connect; req != nil {
+			h.connect = nil
+			h.mu.Unlock()
+			return req
+		}
+		changed := h.changed
+		h.mu.Unlock()
+		select {
+		case <-changed:
+		case <-deadline:
+			return nil
+		}
+	}
+}
+
 func (h *hostState) readExtension(r io.Reader) {
 	br := bufio.NewReader(r)
 	for {
@@ -123,6 +166,21 @@ func (h *hostState) readExtension(r io.Reader) {
 		}
 		if err := json.Unmarshal(buf, &head); err != nil {
 			log.Printf("bad message from extension: %v", err)
+			continue
+		}
+		if head.Type == "connect_request" || head.Type == "connect_cancel" {
+			var msg struct {
+				Request json.RawMessage `json:"request"`
+			}
+			_ = json.Unmarshal(buf, &msg)
+			h.mu.Lock()
+			if head.Type == "connect_request" && len(msg.Request) > 0 {
+				h.setConnect(msg.Request)
+			} else {
+				h.setConnect(nil)
+			}
+			h.mu.Unlock()
+			log.Printf("%s", head.Type)
 			continue
 		}
 		if head.Type == "hello" {
@@ -188,6 +246,19 @@ func (h *hostState) serve(conn net.Conn) {
 			hello = []byte(`{}`)
 		}
 		writeLine(conn, fmt.Appendf(nil, `{"ok":true,"result":%s}`, hello))
+		return
+	}
+
+	if req.Method == "next_connect" {
+		timeout := time.Duration(req.TimeoutMs) * time.Millisecond
+		if timeout <= 0 {
+			timeout = defaultWatch
+		}
+		if connect := h.takeConnect(timeout); connect != nil {
+			writeLine(conn, fmt.Appendf(nil, `{"ok":true,"result":{"request":%s}}`, connect))
+		} else {
+			writeLine(conn, []byte(`{"ok":true,"result":{}}`))
+		}
 		return
 	}
 

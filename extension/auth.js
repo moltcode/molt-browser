@@ -1,16 +1,22 @@
-// Pairing and grant verification.
+// Connection and grant verification.
 //
-// The extension is paired to one Molt backend and one signed-in platform user.
-// Pairing stores the backend's Ed25519 *public* key; the private key never
-// leaves the backend, so nothing in this profile can mint a grant. Every drive
-// command carries a short-lived grant signed by that key; it is checked here
-// before any handler runs, and the verified session id is the only one tab
-// ownership ever sees.
+// The extension signs in to Molt on its own, then connects to the Molt app on
+// this computer: the app, once the user allows it there, hands over a connect
+// token the platform signed, and the platform's verify API confirms that token
+// names the same account the extension signed in with (checkConnection).
+// The verified token also names the app's Ed25519 *public* key; the private
+// key never leaves the app, so nothing in this profile can mint a grant.
+// Every drive command carries a short-lived grant signed by that key; it is
+// checked here before any handler runs, and the verified session id is the
+// only one tab ownership ever sees.
 //
 // Token format: base64url(JSON claims) "." base64url(Ed25519 signature over
 // the first segment's ASCII bytes).
 
-export const PROTOCOL = 2;
+export const PROTOCOL = 3;
+export const PLATFORM_URL = "https://platform.moltcode.com";
+// Marks a pairing the platform verified; anything else is dropped on load.
+export const VERIFIED = "platform";
 export const AUDIENCE = "molt-browser";
 // Grants are minted for 5 minutes; anything claiming longer is rejected.
 export const MAX_GRANT_SECONDS = 15 * 60;
@@ -48,7 +54,9 @@ async function importKey(publicKey) {
 // Checks the signature and the claims every signed message shares, then the
 // scope-specific ones. Returns the verified claims.
 async function verifySigned(token, pairing, scope, now) {
-  if (!pairing?.public_key) deny("unpaired", "this browser is not paired with Molt. Pair it from Molt → Plugins → Browser (Chrome).");
+  if (!pairing?.public_key || pairing.verified !== VERIFIED) {
+    deny("unpaired", "this browser is not connected to Molt. Open the Molt extension in Chrome, sign in and click Connect.");
+  }
   if (typeof token !== "string" || token.length === 0 || token.length > 4096) {
     deny("no_grant", "request carries no Molt grant; molt-browser only drives Chrome from a Molt agent session");
   }
@@ -75,7 +83,7 @@ async function verifySigned(token, pairing, scope, now) {
   if (c.aud !== AUDIENCE) deny("bad_grant", "grant audience is not molt-browser");
   if (c.scope !== scope) deny("bad_grant", `grant scope ${c.scope} cannot be used for ${scope}`);
   if (c.pair_id !== pairing.pair_id || c.kid !== pairing.kid) {
-    deny("pair_mismatch", "grant was issued for a different pairing; re-pair Chrome from Molt → Plugins → Browser (Chrome)");
+    deny("pair_mismatch", "grant was issued for a different connection; connect Chrome again from the Molt extension");
   }
   if (c.user_id !== pairing.user_id) deny("wrong_user", "grant belongs to a different Molt account than the one this browser is paired with");
   if (c.machine_id !== pairing.machine_id) deny("wrong_machine", "grant was issued by a different Molt machine");
@@ -100,29 +108,43 @@ export async function verifyRevoke(token, pairing, now = Math.floor(Date.now() /
   return verifySigned(token, pairing, "revoke", now);
 }
 
-// Pair offers carry only public data: the backend's verification key and the
-// identity the desktop shows next to the same code.
-export function checkOffer(o, now = Math.floor(Date.now() / 1000)) {
+export function sameId(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length || a.length === 0) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+// `verified` is the platform's answer to POST /api/browser/verify for the
+// token the app handed over in `params`. The platform already compared the
+// two accounts; this re-checks that its answer is about this request, this
+// browser, this account and the key the app sent. Returns the pairing to store.
+export function checkConnection(verified, { request, account, installId, params }) {
   const str = (v, max = 256) => typeof v === "string" && v.length > 0 && v.length <= max;
-  if (!o || typeof o !== "object") deny("bad_offer", "pair offer is not an object");
-  for (const k of ["pair_id", "nonce", "kid", "public_key", "user_id", "machine_id"]) {
-    if (!str(o[k])) deny("bad_offer", `pair offer is missing ${k}`);
+  const c = verified?.connection;
+  const user = verified?.user;
+  if (verified?.valid !== true || !c || !user) deny("bad_connection", "the platform did not verify the connection");
+  if (!request || !sameId(c.request_id, request.request_id) || !sameId(params?.request_id, request.request_id)) {
+    deny("request_gone", "the platform verified a different connect request");
   }
-  if (!/^\d{6}$/.test(o.code || "")) deny("bad_offer", "pair offer code must be 6 digits");
-  if (b64urlDecode(o.public_key).length !== 32) deny("bad_offer", "pair offer key is not an Ed25519 public key");
-  if (!Number.isInteger(o.expires_at) || o.expires_at <= now || o.expires_at > now + 300) {
-    deny("bad_offer", "pair offer is expired or too long-lived");
+  if (!sameId(user.id, account?.user?.id) || !sameId(c.user_id, account?.user?.id)) {
+    deny("account_mismatch", "Chrome and the Molt app are signed in to different accounts");
   }
+  if (!sameId(c.browser_install_id, installId)) deny("bad_connection", "the connection was issued for another browser profile");
+  if (!sameId(c.kid, params?.kid) || !sameId(c.public_key, params?.public_key)) {
+    deny("bad_connection", "the app's key does not match the one the platform signed");
+  }
+  if (b64urlDecode(c.public_key).length !== 32) deny("bad_connection", "the app's key is not an Ed25519 public key");
+  if (!str(c.machine_id)) deny("bad_connection", "the connection names no machine");
   return {
-    pair_id: o.pair_id,
-    nonce: o.nonce,
-    code: o.code,
-    kid: o.kid,
-    public_key: o.public_key,
-    user_id: o.user_id,
-    email: str(o.email) ? o.email : null,
-    machine_id: o.machine_id,
-    machine_name: str(o.machine_name) ? o.machine_name : null,
-    expires_at: o.expires_at,
+    pair_id: c.request_id,
+    kid: c.kid,
+    public_key: c.public_key,
+    user_id: c.user_id,
+    email: str(user.email) ? user.email : null,
+    machine_id: c.machine_id,
+    machine_name: str(c.machine_name) ? c.machine_name : null,
+    browser_install_id: installId,
+    verified: VERIFIED,
   };
 }

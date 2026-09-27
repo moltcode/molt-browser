@@ -1,7 +1,7 @@
 // node --test test/  — grant verification against real Ed25519 keys.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkOffer, verifyGrant, verifyRevoke } from "../extension/auth.js";
+import { checkConnection, verifyGrant, verifyRevoke } from "../extension/auth.js";
 
 const b64url = (bytes) => Buffer.from(bytes).toString("base64url");
 const now = Math.floor(Date.now() / 1000);
@@ -21,6 +21,7 @@ const pairing = {
   user_id: "u1",
   machine_id: "m1",
   browser_install_id: "b1",
+  verified: "platform",
 };
 
 const baseClaims = () => ({
@@ -114,23 +115,69 @@ test("revoke needs the paired key and revoke scope", async () => {
   await rejects(verifyRevoke(await sign(baseClaims()), pairing, now), "bad_grant");
 });
 
-test("pair offers must be well-formed and short-lived", () => {
-  const offer = {
-    pair_id: "p1",
-    nonce: "n",
-    code: "482913",
+test("a pairing the platform never verified drives nothing", async () => {
+  const { verified, ...local } = pairing;
+  await rejects(verifyGrant(await sign(baseClaims()), local, now), "unpaired");
+});
+
+// The platform's /api/browser/verify answer and what the app handed over.
+const verified = () => ({
+  valid: true,
+  user: { id: "u1", email: "me@example.com", name: "Me" },
+  connection: {
+    user_id: "u1",
+    machine_id: "m1",
+    machine_name: "mac",
+    request_id: "r1",
+    browser_install_id: "b1",
+    kid: "k1",
+    public_key: backend.publicKey,
+    exp: now + 300,
+  },
+});
+const ctx = () => ({
+  request: { request_id: "r1" },
+  account: { user: { id: "u1" } },
+  installId: "b1",
+  params: { request_id: "r1", kid: "k1", public_key: backend.publicKey, token: "t" },
+});
+
+test("a platform-verified connection becomes the pairing", () => {
+  const p = checkConnection(verified(), ctx());
+  assert.deepEqual(p, {
+    pair_id: "r1",
     kid: "k1",
     public_key: backend.publicKey,
     user_id: "u1",
     email: "me@example.com",
     machine_id: "m1",
     machine_name: "mac",
-    expires_at: now + 120,
+    browser_install_id: "b1",
+    verified: "platform",
+  });
+});
+
+test("the platform's answer must match this request, account, browser and key", () => {
+  const bad = (mutate, code) => {
+    const v = verified();
+    const c = ctx();
+    mutate(v, c);
+    assert.throws(() => checkConnection(v, c), { code });
   };
-  assert.equal(checkOffer(offer, now).code, "482913");
-  assert.throws(() => checkOffer({ ...offer, code: "12345" }, now), { code: "bad_offer" });
-  assert.throws(() => checkOffer({ ...offer, public_key: b64url(new Uint8Array(16)) }, now), { code: "bad_offer" });
-  assert.throws(() => checkOffer({ ...offer, expires_at: now + 3600 }, now), { code: "bad_offer" });
-  assert.throws(() => checkOffer({ ...offer, expires_at: now - 1 }, now), { code: "bad_offer" });
-  assert.throws(() => checkOffer({ ...offer, user_id: undefined }, now), { code: "bad_offer" });
+  bad((v) => (v.valid = false), "bad_connection");
+  bad((v) => delete v.connection, "bad_connection");
+  bad((v) => (v.connection.request_id = "r2"), "request_gone");
+  bad((v, c) => (c.request = null), "request_gone");
+  bad((v, c) => (c.params.request_id = "r2"), "request_gone");
+  bad((v) => (v.user.id = "u2"), "account_mismatch");
+  bad((v) => (v.connection.user_id = "u2"), "account_mismatch");
+  bad((v, c) => (c.account = null), "account_mismatch");
+  bad((v) => (v.connection.browser_install_id = "b2"), "bad_connection");
+  bad((v, c) => (c.params.public_key = other.publicKey), "bad_connection");
+  bad((v, c) => (c.params.kid = "k2"), "bad_connection");
+  bad((v, c) => {
+    v.connection.public_key = b64url(new Uint8Array(16));
+    c.params.public_key = v.connection.public_key;
+  }, "bad_connection");
+  bad((v) => (v.connection.machine_id = ""), "bad_connection");
 });

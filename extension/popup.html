@@ -3,45 +3,101 @@
   <head>
     <meta charset="utf-8" />
     <style>
+      /* Radix slate + violet scales. Square corners throughout. */
+      :root {
+        --gray-1: #fcfcfd; --gray-3: #f0f0f3; --gray-4: #e8e8ec; --gray-7: #cdced6;
+        --gray-8: #b9bbc6; --gray-11: #60646c; --gray-12: #1c2024;
+        --accent-3: #f4f0fe; --accent-4: #ebe4ff; --accent-9: #6e56cf; --accent-10: #654dc4; --accent-11: #6550b9;
+        --green-9: #30a46c; --red-3: #feebec; --red-9: #e5484d; --red-10: #dc3e42; --red-11: #ce2c31;
+      }
+      * { box-sizing: border-box; }
       body {
-        margin: 0;
-        width: 260px;
-        font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        color: #1f1b2e;
+        margin: 0; width: 320px; background: var(--gray-1); color: var(--gray-12);
+        font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       }
-      header { display: flex; align-items: center; gap: 8px; padding: 12px 14px 8px; font-weight: 600; }
-      header img { width: 20px; height: 20px; }
-      .row { display: flex; align-items: center; gap: 8px; padding: 6px 14px; }
-      .dot { width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; flex: none; }
-      .dot.ok { background: #22c55e; }
-      .dot.busy { background: #8b5cf6; }
-      .dot.bad { background: #ef4444; }
-      .hint { padding: 0 14px 6px 30px; color: #6b7280; font-size: 12px; }
-      code { font-size: 11px; background: #f3f0ff; padding: 1px 4px; border-radius: 4px; }
+      header { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--gray-4); font-weight: 600; }
+      header img { width: 18px; height: 18px; }
+      header .version { margin-left: auto; font-weight: 400; font-size: 11px; color: var(--gray-11); }
+      ol { list-style: none; margin: 0; padding: 4px 0; }
+      li { display: grid; grid-template-columns: 22px 1fr; column-gap: 10px; padding: 10px 16px; }
+      .num {
+        width: 22px; height: 22px; display: grid; place-items: center; font-size: 11px; font-weight: 600;
+        border: 1px solid var(--gray-7); color: var(--gray-11); background: white;
+      }
+      li.done .num { background: var(--green-9); border-color: var(--green-9); color: white; }
+      li.current .num { background: var(--accent-9); border-color: var(--accent-9); color: white; }
+      li.locked { opacity: 0.55; }
+      .title { font-weight: 600; line-height: 22px; }
+      .detail { grid-column: 2; color: var(--gray-11); font-size: 12px; }
+      .detail b { color: var(--gray-12); font-weight: 600; }
+      .actions { grid-column: 2; display: flex; gap: 8px; margin-top: 8px; }
+      code { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--gray-3); padding: 1px 4px; }
+      .error { grid-column: 2; margin-top: 8px; padding: 6px 8px; background: var(--red-3); color: var(--red-11); font-size: 12px; }
+      .waiting { grid-column: 2; margin-top: 8px; padding: 6px 8px; background: var(--accent-3); color: var(--accent-11); font-size: 12px; }
+
       button {
-        margin: 8px 14px 14px; width: calc(100% - 28px); padding: 8px; border: 0; border-radius: 8px;
-        font-weight: 600; font-size: 13px; line-height: 1; font-family: inherit; cursor: pointer;
+        all: unset; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
+        height: 28px; padding: 0 12px; border-radius: 0; font-size: 12px; font-weight: 500; cursor: pointer;
+        user-select: none; white-space: nowrap;
       }
-      #stop { background: #ef4444; color: white; }
-      #allow, #unpair { background: #ede9fe; color: #5b21b6; }
-      #unpair { margin-top: 0; }
+      button:focus-visible { outline: 2px solid var(--accent-9); outline-offset: 1px; }
+      button:disabled { cursor: default; opacity: 0.5; }
+      .solid { background: var(--accent-9); color: white; }
+      .solid:hover:not(:disabled) { background: var(--accent-10); }
+      .soft { background: var(--accent-3); color: var(--accent-11); }
+      .soft:hover:not(:disabled) { background: var(--accent-4); }
+      .outline { box-shadow: inset 0 0 0 1px var(--gray-7); color: var(--gray-12); background: white; }
+      .outline:hover:not(:disabled) { background: var(--gray-3); }
+      .danger { background: var(--red-9); color: white; }
+      .danger:hover:not(:disabled) { background: var(--red-10); }
+
+      section { border-top: 1px solid var(--gray-4); padding: 12px 16px 14px; }
+      section .row { display: flex; align-items: center; gap: 8px; }
+      .dot { width: 8px; height: 8px; background: var(--gray-8); flex: none; }
+      .dot.busy { background: var(--accent-9); }
+      .dot.bad { background: var(--red-9); }
+      section .actions { margin-top: 10px; }
       [hidden] { display: none !important; }
-      footer { padding: 0 14px 10px; color: #9ca3af; font-size: 11px; }
     </style>
   </head>
   <body>
-    <header><img src="icons/32.png" alt="" />Molt Code</header>
-    <div class="row"><span id="bridge-dot" class="dot"></span><span id="bridge"></span></div>
-    <div id="bridge-hint" class="hint" hidden>
-      Install the <b>Browser</b> plugin in Molt Code, then run <code>molt-browser setup</code> once.
-    </div>
-    <div class="row"><span id="pair-dot" class="dot"></span><span id="pair"></span></div>
-    <div id="pair-hint" class="hint" hidden>Pair from Molt Code → Plugins → Browser (Chrome). Until then no agent can use this browser.</div>
-    <div class="row"><span id="tab-dot" class="dot"></span><span id="tab"></span></div>
-    <button id="stop" hidden>Stop the agent on this tab</button>
-    <button id="allow" hidden>Let agents use this tab again</button>
-    <button id="unpair" hidden>Unpair from Molt</button>
-    <footer id="version"></footer>
+    <header><img src="icons/32.png" alt="" />Molt Code<span id="version" class="version"></span></header>
+    <ol>
+      <li id="step-bridge">
+        <span class="num">1</span>
+        <span class="title">Molt app bridge</span>
+        <span id="bridge-detail" class="detail"></span>
+      </li>
+      <li id="step-account">
+        <span class="num">2</span>
+        <span class="title">Sign in to Molt</span>
+        <span id="account-detail" class="detail"></span>
+        <div class="actions">
+          <button id="sign-in" class="solid" hidden>Sign in</button>
+          <button id="sign-out" class="outline" hidden>Sign out</button>
+        </div>
+        <div id="account-error" class="error" hidden></div>
+      </li>
+      <li id="step-connect">
+        <span class="num">3</span>
+        <span class="title">Connect to the Molt app</span>
+        <span id="connect-detail" class="detail"></span>
+        <div id="connect-waiting" class="waiting" hidden></div>
+        <div class="actions">
+          <button id="connect" class="solid" hidden>Connect</button>
+          <button id="cancel" class="outline" hidden>Cancel</button>
+          <button id="disconnect" class="outline" hidden>Disconnect</button>
+        </div>
+        <div id="connect-error" class="error" hidden></div>
+      </li>
+    </ol>
+    <section id="tab-section" hidden>
+      <div class="row"><span id="tab-dot" class="dot"></span><span id="tab"></span></div>
+      <div class="actions">
+        <button id="stop" class="danger" hidden>Stop the agent on this tab</button>
+        <button id="allow" class="soft" hidden>Let agents use this tab again</button>
+      </div>
+    </section>
     <script src="popup.js"></script>
   </body>
 </html>

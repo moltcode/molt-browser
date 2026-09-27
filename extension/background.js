@@ -7,11 +7,12 @@
 // extension's isolated world, and overlay.js draws the agent cursor, the
 // glow border and the Stop pill.
 //
-// Nothing runs without auth: drive methods need a grant signed by the Molt
-// backend this browser is paired with (auth.js), and the session a grant
-// names is the only owner tab scoping ever sees.
+// Nothing runs without auth: the extension signs in to Molt, connects to the
+// Molt app on this computer through a platform-verified token (auth.js), and
+// drive methods need a grant signed by that app. The session a grant names is
+// the only owner tab scoping ever sees.
 
-import { AuthError, PROTOCOL, checkOffer, verifyGrant, verifyRevoke } from "./auth.js";
+import { AuthError, PLATFORM_URL, PROTOCOL, VERIFIED, checkConnection, sameId, verifyGrant, verifyRevoke } from "./auth.js";
 
 const HOST = "com.moltcode.browser";
 const VERSION = chrome.runtime.getManifest().version;
@@ -34,12 +35,17 @@ let stopped = new Set();
 // agent's `open` silently redirect another agent's next click.
 let agentTabs = {};
 let tabOwners = {};
-// The Molt backend + user this browser answers to (auth.js), and this
-// profile's install id, which every grant must name.
+// The Molt app + user this browser answers to (auth.js), and this profile's
+// install id, which every grant must name.
 let pairing = null;
 let installId = null;
-// The one pair offer waiting for the user's Allow/Deny in pair.html.
-let pending = null;
+// This browser's own Molt sign-in: { token, expires_at, user }. The token is
+// good only for the platform's browser verify API.
+let account = null;
+// The connect request waiting for the user's Allow in the Molt app, or the
+// last one's outcome: { request_id, state: "waiting" | "verifying" | "failed", error }.
+let connecting = null;
+const CONNECT_TTL_MS = 2 * 60 * 1000;
 
 const ready = Promise.all([
   chrome.storage.session.get(["stopped", "agentTabs", "tabOwners"]).then((saved) => {
@@ -47,8 +53,18 @@ const ready = Promise.all([
     agentTabs = saved.agentTabs || {};
     tabOwners = saved.tabOwners || {};
   }),
-  chrome.storage.local.get(["pairing", "installId"]).then(async (saved) => {
+  chrome.storage.local.get(["pairing", "installId", "account"]).then(async (saved) => {
     pairing = saved.pairing || null;
+    account = saved.account || null;
+    // 0.3.0 paired locally, without the platform; that pairing no longer counts.
+    if (pairing && pairing.verified !== VERIFIED) {
+      pairing = null;
+      await chrome.storage.local.remove("pairing");
+    }
+    if (account && !(account.expires_at > Date.now() / 1000)) {
+      account = null;
+      await chrome.storage.local.remove("account");
+    }
     installId = saved.installId;
     if (!installId) {
       installId = crypto.randomUUID();
@@ -56,6 +72,11 @@ const ready = Promise.all([
     }
   }),
 ]);
+
+// Sign-in and sign-out in another extension page land here too.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && Object.hasOwn(changes, "account")) account = changes.account.newValue || null;
+});
 
 function persist() {
   chrome.storage.session.set({ stopped: [...stopped], agentTabs, tabOwners });
@@ -73,14 +94,15 @@ function connect() {
   port.onDisconnect.addListener(() => {
     bridge = { connected: false, error: chrome.runtime.lastError?.message || "bridge closed", hostVersion: null };
     port = null;
+    if (connecting?.state === "waiting") connecting = { ...connecting, state: "failed", error: "The Molt app bridge closed; try again." };
     reconnectTimer = setTimeout(connect, 5000);
   });
   sendHello();
 }
 
 // No secrets: the host and `molt-browser status` show which account this
-// browser is paired with, so Molt can tell paired, unpaired and mismatched
-// apart.
+// browser is connected with, so Molt can tell connected, unconnected and
+// mismatched apart.
 function sendHello() {
   ready.then(() => {
     port?.postMessage({
@@ -303,7 +325,6 @@ async function reattach(tabId) {
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (pending?.tabId === tabId) settlePending(new AuthError("pair_denied", "the pair request was closed in Chrome"));
   sessions.delete(tabId);
   if (stopped.delete(tabId)) persist();
   forgetTab(tabId);
@@ -543,19 +564,38 @@ const control = {
     return { summary: "extension reloading; it reconnects in a few seconds" };
   },
 
-  // Molt asks to pair. The answer waits for the user's Allow in pair.html,
-  // next to the same code the desktop shows.
-  async pair_offer(params) {
-    const offer = checkOffer(params);
-    settlePending(new AuthError("pair_superseded", "a newer pair request replaced this one"));
-    const ms = offer.expires_at * 1000 - Date.now();
-    const answer = new Promise((resolve, reject) => {
-      pending = { offer, resolve, reject, timer: setTimeout(() => settlePending(new AuthError("pair_expired", "nobody answered the pair request in Chrome")), ms) };
-    });
-    const tab = await chrome.tabs.create({ url: chrome.runtime.getURL("pair.html"), active: true });
-    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
-    pending.tabId = tab.id;
-    return answer;
+  // The Molt app's answer to our connect request, after the user allowed it
+  // there: a platform-signed token. The platform checks it against this
+  // browser's own sign-in; only then does the app's key count.
+  async connect_accept(params) {
+    const request = liveRequest(params.request_id);
+    if (!account) deny("signed_out", "sign in to Molt in the extension first");
+    connecting = { ...request, state: "verifying" };
+    try {
+      const verified = await platformVerify(params.token);
+      const next = checkConnection(verified, { request, account, installId, params });
+      await storePairing(next);
+      connecting = null;
+      return {
+        connected: true,
+        request_id: next.pair_id,
+        user_id: next.user_id,
+        email: next.email,
+        machine_id: next.machine_id,
+        browser_install_id: installId,
+      };
+    } catch (e) {
+      connecting = { ...request, state: "failed", error: e.message };
+      throw e;
+    }
+  },
+
+  // The Molt app declined, or is signed out.
+  async connect_deny(params) {
+    const request = liveRequest(params.request_id);
+    const error = params.reason === "signed_out" ? "The Molt app is not signed in." : "Declined in the Molt app.";
+    connecting = { ...request, state: "failed", error };
+    return { denied: true };
   },
 
   // Molt signed out or switched accounts.
@@ -567,32 +607,53 @@ const control = {
   },
 };
 
-function settlePending(error, value) {
-  if (!pending) return;
-  const p = pending;
-  pending = null;
-  clearTimeout(p.timer);
-  if (p.tabId != null) chrome.tabs.remove(p.tabId).catch(() => {});
-  if (error) p.reject(error);
-  else p.resolve(value);
+const deny = (code, message) => {
+  throw new AuthError(code, message);
+};
+
+function liveRequest(requestId) {
+  if (!connecting || connecting.request_id !== requestId || connecting.state !== "waiting") {
+    deny("request_gone", "Chrome is no longer waiting for this connect request");
+  }
+  if (Date.now() > connecting.expires_at) {
+    connecting = { ...connecting, state: "failed", error: "Nobody answered in the Molt app in time." };
+    deny("request_gone", "the connect request expired");
+  }
+  return connecting;
 }
 
-async function acceptPending() {
-  const { offer } = pending;
-  pairing = {
-    pair_id: offer.pair_id,
-    kid: offer.kid,
-    public_key: offer.public_key,
-    user_id: offer.user_id,
-    email: offer.email,
-    machine_id: offer.machine_id,
-    machine_name: offer.machine_name,
-    browser_install_id: installId,
-    paired_at: Date.now(),
-  };
+async function platformUrl() {
+  const { platformUrl } = await chrome.storage.local.get("platformUrl");
+  return platformUrl || PLATFORM_URL;
+}
+
+async function platformVerify(token) {
+  if (typeof token !== "string" || !token) deny("bad_connection", "the Molt app sent no connect token");
+  let res;
+  try {
+    res = await fetch(`${await platformUrl()}/api/browser/verify`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${account.token}` },
+      body: JSON.stringify({ token }),
+    });
+  } catch (e) {
+    deny("platform_unreachable", `could not reach Molt to verify the connection: ${e.message}`);
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const code = body?.error?.code || "bad_connection";
+    if (code === "signed_out") await signOut();
+    deny(code, body?.error?.message || `the platform refused the connection (HTTP ${res.status})`);
+  }
+  return body;
+}
+
+async function storePairing(next) {
+  const previous = pairing;
+  pairing = { ...next, paired_at: Date.now() };
   await chrome.storage.local.set({ pairing });
+  if (previous) for (const tabId of [...sessions.keys()]) await detach(tabId);
   sendHello();
-  settlePending(null, { accepted: true, pair_id: offer.pair_id, nonce: offer.nonce, browser_install_id: installId });
 }
 
 async function clearPairing() {
@@ -600,6 +661,72 @@ async function clearPairing() {
   await chrome.storage.local.remove("pairing");
   for (const tabId of [...sessions.keys()]) await detach(tabId);
   sendHello();
+}
+
+// Sign-in opens the platform's redirect login in a tab; it comes back to
+// signed-in.html with a platform token, which is traded at once for a
+// browser-only extension token and dropped. Any site can navigate to that
+// page, so it only counts with the state this browser started sign-in with.
+async function signIn() {
+  const state = crypto.randomUUID();
+  await chrome.storage.session.set({ signInState: { state, expires_at: Date.now() + 10 * 60 * 1000 } });
+  const returnUrl = `${chrome.runtime.getURL("signed-in.html")}?state=${state}`;
+  await chrome.tabs.create({ url: `${await platformUrl()}/auth/redirect?return_url=${encodeURIComponent(returnUrl)}` });
+}
+
+async function finishSignIn({ token, state }) {
+  const { signInState } = await chrome.storage.session.get("signInState");
+  await chrome.storage.session.remove("signInState");
+  if (!signInState || !sameId(signInState.state, state) || Date.now() > signInState.expires_at) {
+    throw new Error("This sign-in was not started from the Molt extension. Start it again from the toolbar popup.");
+  }
+  if (typeof token !== "string" || !token) throw new Error("Sign-in did not return a token.");
+  const res = await fetch(`${await platformUrl()}/api/browser/session`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: "{}",
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.token || !body.user?.id) throw new Error(body?.error?.message || `Sign-in failed (HTTP ${res.status}).`);
+  await setAccount({ token: body.token, expires_at: body.expires_at, user: body.user });
+  return { email: body.user.email || body.user.name || null };
+}
+
+async function setAccount(next) {
+  // A different account never inherits this browser's connection.
+  if (pairing && pairing.user_id !== next.user.id) await clearPairing();
+  account = next;
+  connecting = null;
+  await chrome.storage.local.set({ account });
+}
+
+async function signOut() {
+  account = null;
+  connecting = null;
+  await chrome.storage.local.remove("account");
+  if (pairing) await clearPairing();
+}
+
+// Asks the Molt app on this computer to connect. The host holds the request
+// until the app picks it up (molt-browser watch) and shows its Allow modal.
+function requestConnect() {
+  if (!account) throw new Error("Sign in to Molt first.");
+  if (!port || !bridge.connected) throw new Error("The Molt app bridge is not running.");
+  const request_id = crypto.randomUUID();
+  connecting = { request_id, state: "waiting", expires_at: Date.now() + CONNECT_TTL_MS };
+  port.postMessage({
+    type: "connect_request",
+    request: {
+      request_id,
+      browser_install_id: installId,
+      user: { id: account.user.id, email: account.user.email || null, name: account.user.name || null },
+    },
+  });
+}
+
+function cancelConnect() {
+  if (connecting?.state === "waiting") port?.postMessage({ type: "connect_cancel", request_id: connecting.request_id });
+  connecting = null;
 }
 
 const handlers = {
@@ -979,35 +1106,36 @@ async function groupTab(tab) {
 // Popup and overlay messages
 // ---------------------------------------------------------------------------
 
-// Pairing decisions only count from the extension's own pages; content
-// scripts report the page's URL here.
+// Account and connection actions only count from the extension's own popup;
+// content scripts report the page's URL here.
 const fromExtensionPage = (sender, page) => sender.id === chrome.runtime.id && sender.url?.startsWith(chrome.runtime.getURL(page));
 
+// Popup actions: each answers { ok, error? } once done.
+const popupActions = {
+  sign_in: signIn,
+  sign_out: signOut,
+  connect: async () => requestConnect(),
+  cancel_connect: async () => cancelConnect(),
+  disconnect: clearPairing,
+};
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg?.molt === "pair_state" && fromExtensionPage(sender, "pair.html")) {
-    ready.then(() => {
-      const o = pending?.offer;
-      sendResponse({
-        offer: o && { pair_id: o.pair_id, code: o.code, email: o.email, machine_name: o.machine_name, expires_at: o.expires_at },
-        replaces: pairing && { email: pairing.email, machine_name: pairing.machine_name },
-      });
-    });
+  if (msg?.molt === "signed_in" && fromExtensionPage(sender, "signed-in.html")) {
+    ready
+      .then(() => finishSignIn(msg))
+      .then(
+        (r) => sendResponse({ ok: true, ...r }),
+        (e) => sendResponse({ ok: false, error: e.message || String(e) })
+      );
     return true;
   }
-  if (msg?.molt === "pair_decision" && fromExtensionPage(sender, "pair.html")) {
-    if (!pending || pending.offer.pair_id !== msg.pair_id) {
-      sendResponse({ ok: false, error: "this pair request is no longer active" });
-      return;
-    }
-    if (msg.allow) acceptPending().then(() => sendResponse({ ok: true }));
-    else {
-      settlePending(new AuthError("pair_denied", "the user declined pairing in Chrome"));
-      sendResponse({ ok: true });
-    }
-    return true;
-  }
-  if (msg?.molt === "unpair" && fromExtensionPage(sender, "popup.html")) {
-    clearPairing().then(() => sendResponse({ ok: true }));
+  if (Object.hasOwn(popupActions, msg?.molt) && fromExtensionPage(sender, "popup.html")) {
+    ready
+      .then(() => popupActions[msg.molt]())
+      .then(
+        () => sendResponse({ ok: true }),
+        (e) => sendResponse({ ok: false, error: e.message || String(e) })
+      );
     return true;
   }
   if (msg?.molt === "stop") {
@@ -1031,7 +1159,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({
         bridge,
         version: VERSION,
+        account: account && { email: account.user.email, name: account.user.name },
         pairing: pairing && { email: pairing.email, machine_name: pairing.machine_name, paired_at: pairing.paired_at },
+        connecting: connecting && { state: connecting.state, error: connecting.error || null },
         tab: msg.tabId == null ? null : { controlled: sessions.has(msg.tabId), stopped: stopped.has(msg.tabId) },
       });
     });

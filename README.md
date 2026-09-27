@@ -33,38 +33,49 @@ listens on a private socket in Molt's plugin state directory.
      `chrome://extensions`, turn on Developer mode, click **Load unpacked**
      and pick that folder. The extension id is always
      `gajikdfpamklabiiaonmdeamjabehoig`.
-3. Pair it: **Plugins → Browser (Chrome) → Pair Chrome** in Molt Code. Chrome
-   opens a page with the same 6-digit code the desktop shows; click
-   **Allow**. `molt-browser status` should print `extension: connected` and
-   `auth: paired with <you>`.
+3. Connect it: click the Molt icon in Chrome's toolbar and follow the three
+   steps. **Sign in** with the same Molt account as the app, then
+   **Connect**; the Molt app asks you to **Allow** it. `molt-browser status`
+   should print `extension: connected` and `auth: connected as <you>`.
 
 ## Auth
 
-Opening the bridge socket drives nothing. The extension is paired with one
-Molt backend and the platform account signed in there, and it runs a
-command only when the command carries a grant that backend signed:
+Opening the bridge socket drives nothing. The extension signs in to Molt on
+its own, connects to the Molt app on this computer only after the platform
+confirms both are signed in to the same account, and runs a command only
+when the command carries a grant that app signed:
 
-- **Pairing** stores the backend's Ed25519 *public* key in the extension.
-  The private key stays with the backend, so nothing in the Chrome profile
-  can mint grants. A second pairing replaces the first only after you
-  approve it in Chrome.
+- **Sign-in** uses the platform's redirect login. The extension trades the
+  platform token for a browser-only token at once and keeps only that; it is
+  good for nothing but the verify call below.
+- **Connect** starts in Chrome. The request (request id, browser profile id,
+  signed-in account; nothing secret) waits in the host until the Molt app
+  picks it up with `molt-browser watch` and shows an Allow/Deny modal. On
+  Allow the app asks the platform for a 5-minute connect token naming its
+  user, machine and Ed25519 *public* key and hands it to Chrome. Chrome sends
+  it to the platform's `POST /api/browser/verify` with its own token; the
+  platform checks both signatures and compares the two account ids in
+  constant time (no database lookup). Only then does Chrome store the app's
+  key. The private key stays with the app, so nothing in the Chrome profile
+  can mint grants.
 - **Grants** are signed for one Molt agent session and live 5 minutes. The
   CLI fetches a fresh one per command with the session's
-  `MOLT_BROWSER_LEASE`; the backend signs only while its signed-in user is
-  the paired one. The extension checks signature, pairing, user, machine,
+  `MOLT_BROWSER_LEASE`; the app signs only while its signed-in user is the
+  connected one. The extension checks signature, connection, user, machine,
   browser profile, audience, scope and expiry before any handler runs, and
   the session in the grant is the only one tab ownership sees.
-- **Sign-out or account switch** in Molt rotates the backend key (every
-  lease and outstanding grant dies with it) and pushes a signed unpair when
-  Chrome is connected. If Chrome was closed at the time, a grant already in
-  flight stays valid until it expires, at most 5 minutes. **Unpair** in the
-  toolbar popup drops the pairing immediately.
+- **Sign-out or account switch** in Molt rotates the app's key (every lease
+  and outstanding grant dies with it) and pushes a signed unpair when Chrome
+  is connected. If Chrome was closed at the time, a grant already in flight
+  stays valid until it expires, at most 5 minutes. **Disconnect** or
+  **Sign out** in the toolbar popup drops the connection immediately.
 - The host is a pipe: it relays grants, never logs them, and refuses to
-  drive an extension older than protocol 2.
+  drive an extension older than protocol 3 (0.3.0 paired without the
+  platform; that pairing is dropped).
 
 This stops any process that can open the socket from driving Chrome. It
 does not defend against malware that already runs as you and can read the
-backend's data directory.
+app's data directory.
 
 ## Commands
 

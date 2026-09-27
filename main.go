@@ -7,8 +7,9 @@
 //
 // Each drive command carries a grant: a 5-minute token the Molt backend signs
 // for this agent session (MOLT_BROWSER_LEASE proves which session it is).
-// The extension verifies it against the key it was paired with, so opening
-// the socket alone drives nothing.
+// The extension verifies it against the key of the Molt app it connected to
+// (a key the platform vouched for), so opening the socket alone drives
+// nothing.
 package main
 
 import (
@@ -74,8 +75,9 @@ Setup
   setup                           register the native host, print install steps
   reload-extension                reload an unpacked extension after an update
 
-  Chrome only takes commands from a Molt agent session once it is paired
-  with your Molt account: Molt Code → Plugins → Browser (Chrome) → Pair.
+  Chrome only takes commands from a Molt agent session once it is connected:
+  in Chrome, open the Molt extension, sign in to Molt and click Connect, then
+  Allow in the Molt app. Both must be signed in to the same account.
 
 Global flags
   --tab ID        target tab (see the default above)
@@ -153,7 +155,9 @@ func main() {
 		runSetup(written, hostErr)
 	case "status":
 		runStatus(a)
-	case "pair", "unpair":
+	case "watch":
+		runWatch(a)
+	case "connect", "unpair":
 		runPairing(cmd, rest, a)
 	default:
 		method, params, err := buildRequest(cmd, rest, a)
@@ -398,7 +402,7 @@ type response struct {
 var errNotConnected = errors.New("not connected")
 
 // Methods the extension accepts without a grant.
-var grantFree = map[string]bool{"hello": true, "reload_extension": true, "pair_offer": true, "unpair": true}
+var grantFree = map[string]bool{"hello": true, "reload_extension": true, "next_connect": true, "connect_accept": true, "connect_deny": true, "unpair": true}
 
 func request(method string, params map[string]any, grant string, timeout time.Duration) (response, error) {
 	var resp response
@@ -535,35 +539,55 @@ func runStatus(a args) {
 	case hello.Protocol < minProtocol:
 		fmt.Println("auth: extension is outdated and cannot check Molt auth; update it, then run molt-browser reload-extension")
 	case hello.Paired == nil:
-		fmt.Println("auth: not paired. Pair from Molt Code → Plugins → Browser (Chrome).")
+		fmt.Println("auth: not connected. In Chrome, open the Molt extension, sign in and click Connect.")
 	default:
-		fmt.Printf("auth: paired with %s\n", hello.Paired.Email)
+		fmt.Printf("auth: connected as %s\n", hello.Paired.Email)
 	}
 }
 
-// pair and unpair are run by the Molt backend. A pair offer carries only
-// public data (the backend's verification key, the code the desktop shows)
-// and waits for the user's Allow in Chrome; unpair carries a revoke the
-// paired backend signed.
+// watch, connect and unpair are run by the Molt app. watch waits for the
+// extension's connect request (nothing secret: its request id, install id and
+// signed-in account); connect answers it with the platform-signed token, or a
+// denial; unpair carries a revoke the connected app signed.
+func runWatch(a args) {
+	timeout := timeoutFlag(a)
+	if _, ok := a.flags["timeout"]; !ok {
+		timeout = defaultWatch
+	}
+	resp, err := request("next_connect", nil, "", timeout)
+	if errors.Is(err, errNotConnected) {
+		fatalf("not_connected: the Molt Chrome extension is not connected")
+	}
+	if err != nil {
+		fatalf("%v", err)
+	}
+	if !resp.OK {
+		if resp.Error != nil {
+			fatalf("%s: %s", resp.Error.Code, resp.Error.Message)
+		}
+		fatalf("watch failed")
+	}
+	fmt.Println(string(resp.Result))
+}
+
 func runPairing(cmd string, rest []string, a args) {
 	if len(rest) != 1 {
-		fatalf("usage: molt-browser %s <json>", cmd)
+		fatalf("usage: molt-browser %s <json|token>", cmd)
 	}
 	var params map[string]any
-	method := "pair_offer"
-	if cmd == "pair" {
+	method := "unpair"
+	if cmd == "connect" {
 		if err := json.Unmarshal([]byte(rest[0]), &params); err != nil {
-			fatalf("pair offer is not JSON: %v", err)
+			fatalf("connect answer is not JSON: %v", err)
+		}
+		method = "connect_accept"
+		if denied, _ := params["denied"].(bool); denied {
+			method = "connect_deny"
 		}
 	} else {
-		method = "unpair"
 		params = map[string]any{"token": rest[0]}
 	}
-	timeout := timeoutFlag(a)
-	if _, ok := a.flags["timeout"]; !ok && cmd == "pair" {
-		timeout = 150 * time.Second
-	}
-	resp, err := request(method, params, "", timeout)
+	resp, err := request(method, params, "", timeoutFlag(a))
 	if errors.Is(err, errNotConnected) {
 		fatalf("not_connected: the Molt Chrome extension is not connected")
 	}

@@ -7,9 +7,11 @@
 // profile, serves a small test page, then runs the molt-browser CLI against
 // it exactly as an agent would. Your own Chrome profile is never touched.
 //
-// This process also plays the Molt backend: it holds an Ed25519 key, pairs
-// the extension (clicking Allow on pair.html) and mints grants for agent
-// sessions over the same HTTP endpoint shape the backend serves.
+// This process also plays the Molt app and the platform: the app holds an
+// Ed25519 key, picks up the extension's connect request (molt-browser watch),
+// answers it with a connect token, and mints grants for agent sessions over
+// the same HTTP endpoint shape the backend serves; the platform's
+// /api/browser/verify checks that token against the extension's sign-in.
 import { spawn, execFile } from "node:child_process";
 import { generateKeyPairSync, randomUUID, sign as edSign } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
@@ -74,6 +76,31 @@ const mint = (session_id, extra = {}, scope = "drive") => {
   return signToken({ v: 1, aud: "molt-browser", scope, ...pair, session_id, iat: now, exp: now + 300, ...extra });
 };
 const leaseFor = (session) => `lease-${session}`;
+// What the extension is signed in with, and the connect tokens the fake
+// platform knows: one for the same account, one for another.
+const extToken = "ext-token-user-1";
+const connectTokens = { "connect-ok": "user-1", "connect-other": "user-2" };
+let lastRequest = null;
+
+function platformVerify(req, body, res) {
+  res.setHeader("content-type", "application/json");
+  const deny = (status, code) => {
+    res.statusCode = status;
+    res.end(JSON.stringify({ valid: false, error: { code, message: code } }));
+  };
+  if (req.headers.authorization !== `Bearer ${extToken}`) return deny(401, "signed_out");
+  const owner = connectTokens[JSON.parse(body).token];
+  if (!owner) return deny(401, "bad_connect_token");
+  if (owner !== "user-1") return deny(403, "account_mismatch");
+  res.end(JSON.stringify({
+    valid: true,
+    user: { id: "user-1", email: "e2e@molt.test", name: "E2E" },
+    connection: {
+      user_id: "user-1", machine_id: pair.machine_id, machine_name: "e2e", request_id: lastRequest.request_id,
+      browser_install_id: lastRequest.browser_install_id, kid: pair.kid, public_key: rawPublic,
+    },
+  }));
+}
 
 const server = createServer((req, res) => {
   if (req.url === "/grant" && req.method === "POST") {
@@ -88,6 +115,27 @@ const server = createServer((req, res) => {
       }
       res.end(JSON.stringify({ grant: mint(session_id) }));
     });
+    return;
+  }
+  // The platform's redirect login, already signed in: back to return_url
+  // with a platform token, the way its page does it.
+  if (req.url.startsWith("/auth/redirect")) {
+    const returnUrl = new URL(req.url, base).searchParams.get("return_url");
+    res.setHeader("content-type", "text/html");
+    return res.end(`<script>const u = new URL(${JSON.stringify(returnUrl)}); u.searchParams.set("token", "platform-jwt-user-1"); location.href = u.toString();</script>`);
+  }
+  if (req.url === "/api/browser/session" && req.method === "POST") {
+    res.setHeader("content-type", "application/json");
+    if (req.headers.authorization !== "Bearer platform-jwt-user-1") {
+      res.statusCode = 401;
+      return res.end(JSON.stringify({ valid: false, error: { code: "unauthenticated", message: "Sign in to Molt first" } }));
+    }
+    return res.end(JSON.stringify({ token: extToken, expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: "user-1", email: "e2e@molt.test", name: "E2E" } }));
+  }
+  if (req.url === "/api/browser/verify" && req.method === "POST") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => platformVerify(req, body, res));
     return;
   }
   if (req.url === "/api/ping") return res.end(JSON.stringify({ pong: true }));
@@ -190,32 +238,105 @@ try {
     status = (await cli("status"));
   }
   expect(status?.includes("connected ("), "bridge connects");
-  expect(status?.includes("not paired"), "status reports an unpaired extension");
+  expect(status?.includes("not connected."), "status reports an unconnected extension");
 
-  // Nothing drives an unpaired browser, grant or not.
-  expect((await raw({ method: "tabs" })).error?.code === "unpaired", "raw socket command is rejected before pairing");
-  expect((await raw({ method: "tabs", grant: mint("x") })).error?.code === "unpaired", "a grant is useless before pairing");
+  // Nothing drives an unconnected browser, grant or not.
+  expect((await raw({ method: "tabs" })).error?.code === "unpaired", "raw socket command is rejected before connecting");
+  expect((await raw({ method: "tabs", grant: mint("x") })).error?.code === "unpaired", "a grant is useless before connecting");
   expect((await runCli(["tabs"], {})) === null, "the CLI outside a Molt session has no grant");
 
-  // Pair: Molt sends the offer, the user clicks Allow on pair.html.
-  const offer = { ...pair, nonce: randomUUID(), public_key: rawPublic, code: "482913", email: "e2e@molt.test", machine_name: "e2e", expires_at: Math.floor(Date.now() / 1000) + 120 };
-  delete offer.browser_install_id;
-  const paired = runCli(["pair", JSON.stringify(offer)], {}, 60000);
-  let pairTarget;
-  for (let i = 0; i < 40 && !pairTarget; i++) {
-    await sleep(250);
-    pairTarget = (await cdp("Target.getTargets")).targetInfos.find((t) => t.url.endsWith("/pair.html"));
-  }
-  expect(!!pairTarget, "a pair offer opens pair.html");
-  const { sessionId: pairSession } = await cdp("Target.attachToTarget", { targetId: pairTarget.targetId, flatten: true });
-  await sleep(500);
-  const shown = await cdp("Runtime.evaluate", { expression: "document.getElementById('code').textContent", returnByValue: true }, pairSession);
-  expect(shown.result.value === "482 913", "pair.html shows the desktop's code");
-  await cdp("Runtime.evaluate", { expression: "document.getElementById('allow').click()" }, pairSession);
-  const ack = JSON.parse((await paired) || "{}");
-  expect(ack.accepted && ack.nonce === offer.nonce && ack.pair_id === pair.pair_id && ack.browser_install_id, "Allow acks the offer with this browser's install id");
+  // Point the extension at the fake platform.
+  const swEval = async (expression) => {
+    const { targetInfos } = await cdp("Target.getTargets");
+    const sw = targetInfos.find((t) => t.type === "service_worker" && t.url.includes(extId));
+    const { sessionId } = await cdp("Target.attachToTarget", { targetId: sw.targetId, flatten: true });
+    const r = await cdp("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sessionId);
+    await cdp("Target.detachFromTarget", { sessionId }).catch(() => {});
+    return r.result?.value;
+  };
+  await swEval(`chrome.storage.local.set({ platformUrl: ${JSON.stringify(base)} })`);
+  // The popup's steps: signed in, Connect enabled.
+  const { targetId: popupTarget } = await cdp("Target.createTarget", { url: `chrome-extension://${extId}/popup.html` });
+  const { sessionId: popup } = await cdp("Target.attachToTarget", { targetId: popupTarget, flatten: true });
+  const inPopup = async (expression) =>
+    (await cdp("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, popup)).result?.value;
+  // SHOTS=dir saves the popup at each step.
+  const shot = async (name) => {
+    if (!process.env.SHOTS) return;
+    const h = await inPopup("document.body.scrollHeight");
+    const { data } = await cdp("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 0, width: 320, height: h, scale: 2 } }, popup);
+    mkdirSync(process.env.SHOTS, { recursive: true });
+    writeFileSync(join(process.env.SHOTS, `${name}.png`), Buffer.from(data, "base64"));
+  };
+  const waitPopup = async (expression) => {
+    for (let i = 0; i < 20; i++) {
+      if (await inPopup(expression)) return true;
+      await sleep(250);
+    }
+    return false;
+  };
+  expect(await waitPopup(`!document.getElementById("sign-in").hidden && document.getElementById("connect").disabled`), "popup asks to sign in before Connect");
+  await shot("1-sign-in");
+
+  // A site navigating to the return page with its own token signs nobody in.
+  const signedInUrl = `chrome-extension://${extId}/signed-in.html`;
+  const { targetId: forgedTab } = await cdp("Target.createTarget", { url: `${signedInUrl}?state=forged&token=platform-jwt-user-1` });
+  const { sessionId: forgedSession } = await cdp("Target.attachToTarget", { targetId: forgedTab, flatten: true });
+  await sleep(1000);
+  const forgedText = (await cdp("Runtime.evaluate", { expression: "document.body.innerText", returnByValue: true }, forgedSession)).result.value;
+  expect(forgedText.includes("not started from the Molt extension"), "a sign-in the extension did not start is refused");
+  await cdp("Target.closeTarget", { targetId: forgedTab });
+  expect(await waitPopup(`!document.getElementById("sign-in").hidden`), "still signed out after the forged return");
+
+  // Sign in: a tab to the platform, back to signed-in.html, token traded.
+  const before = new Set((await cdp("Target.getTargets")).targetInfos.map((t) => t.targetId));
+  await inPopup(`document.getElementById("sign-in").click()`);
+  expect(await waitPopup(`document.getElementById("account-detail").textContent.includes("e2e@molt.test")`), "popup shows the signed-in account");
+  const returned = (await cdp("Target.getTargets")).targetInfos.find((t) => !before.has(t.targetId) && t.url.startsWith(signedInUrl));
+  expect(returned && !returned.url.includes("token="), "the return page drops the token from its URL");
+  if (returned) await cdp("Target.closeTarget", { targetId: returned.targetId });
+  const stored = await swEval(`chrome.storage.local.get("account").then((s) => s.account.token)`);
+  expect(stored === extToken, "only the browser-only token is stored");
+  expect(await waitPopup(`!document.getElementById("connect").hidden && !document.getElementById("connect").disabled`), "popup offers Connect");
+  await shot("2-connect");
+
+  // Chrome asks, the app picks the request up, and answers. First a denial,
+  // then a token for another account, then the real one.
+  const ask = async () => {
+    const watching = runCli(["watch", "--json", "--timeout", "10"], {}, 20000);
+    await sleep(300);
+    await inPopup(`document.getElementById("connect").click()`);
+    const got = JSON.parse((await watching) || "{}").request;
+    if (got) lastRequest = got;
+    return got;
+  };
+  let request = await ask();
+  expect(request?.user?.id === "user-1" && request?.user?.email === "e2e@molt.test" && request?.browser_install_id, "watch gets Chrome's connect request with its account");
+  expect(await waitPopup(`document.getElementById("connect-waiting").textContent.includes("Allow")`), "popup waits for Allow in the Molt app");
+  await shot("3-waiting");
+  await runCli(["connect", JSON.stringify({ request_id: request.request_id, denied: true })], {});
+  expect(await waitPopup(`document.getElementById("connect-error").textContent.includes("Declined")`), "a denial shows in the popup");
+  expect((await runCli(["connect", JSON.stringify({ request_id: request.request_id, kid: pair.kid, public_key: rawPublic, token: "connect-ok" })], {})) === null, "a denied request cannot be accepted afterwards");
+
+  request = await ask();
+  expect((await runCli(["connect", JSON.stringify({ request_id: request.request_id, kid: pair.kid, public_key: rawPublic, token: "connect-other" })], {})) === null, "a connect token for another account is refused");
+  expect(await waitPopup(`document.getElementById("connect-error").textContent.includes("account_mismatch")`), "the account mismatch shows in the popup");
+  await shot("4-refused");
+  expect((await raw({ method: "tabs", grant: mint("x") })).error?.code === "unpaired", "a refused connect pairs nothing");
+
+  request = await ask();
+  const intruderKey = generateKeyPairSync("ed25519").publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("base64url");
+  expect((await runCli(["connect", JSON.stringify({ request_id: request.request_id, kid: pair.kid, public_key: intruderKey, token: "connect-ok" })], {})) === null, "a key other than the one the platform signed is refused");
+
+  request = await ask();
+  const ack = JSON.parse((await runCli(["connect", JSON.stringify({ request_id: request.request_id, kid: pair.kid, public_key: rawPublic, token: "connect-ok" })], {})) || "{}");
+  expect(ack.connected && ack.request_id === request.request_id && ack.user_id === "user-1" && ack.browser_install_id === request.browser_install_id && ack.machine_id === pair.machine_id, "Allow + platform verify connects this browser");
+  pair.pair_id = request.request_id;
   pair.browser_install_id = ack.browser_install_id;
-  expect((await cli("status"))?.includes("paired with e2e@molt.test"), "status shows the paired account");
+  expect((await cli("status"))?.includes("connected as e2e@molt.test"), "status shows the connected account");
+  expect(await waitPopup(`document.getElementById("connect-detail").textContent.includes("Connected to e2e")`), "popup shows the connection");
+  await shot("5-connected");
+  await cdp("Target.closeTarget", { targetId: popupTarget });
 
   expect((await raw({ method: "tabs" })).error?.code === "no_grant", "raw socket command without a grant is rejected after pairing");
   expect((await raw({ method: "tabs", grant: mint("x", { user_id: "user-2" }) })).error?.code === "wrong_user", "a grant for another user is rejected");
