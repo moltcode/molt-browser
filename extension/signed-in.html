@@ -4,17 +4,31 @@
     <meta charset="utf-8" />
     <title>Molt Code</title>
     <style>
-      :root { --gray-1: #fcfcfd; --gray-4: #e8e8ec; --gray-11: #60646c; --gray-12: #1c2024; --green-9: #30a46c; --red-3: #feebec; --red-11: #ce2c31; }
-      body {
-        margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--gray-1); color: var(--gray-12);
-        font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      /* Same Molt desktop tokens as popup.html. */
+      :root {
+        color-scheme: light dark;
+        --ink: #111112; --ink-2: #3c3c40; --ink-3: #8f8f95; --surface: #ffffff; --paper: #fafafb;
+        --border: #ececed; --ok: #1f7a4d; --ok-dot: #2ba05f; --err: #c33025; --err-tint: #fbe4e1;
       }
-      main { width: 380px; background: white; border: 1px solid var(--gray-4); padding: 24px; }
-      header { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 12px; }
-      header img { width: 20px; height: 20px; }
-      .muted { color: var(--gray-11); font-size: 13px; }
-      .ok { color: var(--green-9); font-weight: 600; }
-      .error { background: var(--red-3); color: var(--red-11); padding: 8px 10px; font-size: 13px; }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --ink: #ededf0; --ink-2: #c6c6cc; --ink-3: #8b8b93; --surface: #1a1a1d; --paper: #161619;
+          --border: #2a2a2f; --ok: #4ec98a; --ok-dot: #39c07a; --err: #f07c6b; --err-tint: #2e1b19;
+        }
+      }
+      body {
+        margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--paper); color: var(--ink);
+        font: 13px/1.45 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+      main { width: 380px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
+      header { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; letter-spacing: -0.14px; margin-bottom: 16px; }
+      header img { width: 20px; height: 20px; border-radius: 6px; }
+      p { margin: 8px 0 0; }
+      .muted { color: var(--ink-3); }
+      .muted b { color: var(--ink-2); font-weight: 500; }
+      .ok { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+      .ok::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok-dot); flex: none; }
+      .error { background: var(--err-tint); color: var(--err); padding: 8px 10px; border-radius: 6px; }
       [hidden] { display: none !important; }
     </style>
   </head>

@@ -3,65 +3,83 @@
   <head>
     <meta charset="utf-8" />
     <style>
-      /* Radix slate + violet scales. Square corners throughout. */
+      /* Molt desktop tokens (compose_desktop widgets/theme/Colors.kt): a neutral
+         ramp where actions follow the ink, and chroma only marks status. */
       :root {
-        --gray-1: #fcfcfd; --gray-3: #f0f0f3; --gray-4: #e8e8ec; --gray-7: #cdced6;
-        --gray-8: #b9bbc6; --gray-11: #60646c; --gray-12: #1c2024;
-        --accent-3: #f4f0fe; --accent-4: #ebe4ff; --accent-9: #6e56cf; --accent-10: #654dc4; --accent-11: #6550b9;
-        --amber-3: #fff7c2; --amber-7: #f3d673; --amber-11: #ab6400; --red-6: #fdbdbe;
-        --green-9: #30a46c; --red-3: #feebec; --red-9: #e5484d; --red-10: #dc3e42; --red-11: #ce2c31;
+        color-scheme: light dark;
+        --ink: #111112; --ink-2: #3c3c40; --ink-3: #8f8f95; --ink-4: #a8a8ad;
+        --surface: #ffffff; --paper: #fafafb; --fill: #f1f1f2; --hover: #f6f6f7;
+        --border: #ececed; --border-strong: #d8d8da; --link: #1d6ff2;
+        --ok: #1f7a4d; --ok-dot: #2ba05f; --ok-tint: #e3f2e9;
+        --warn: #9a6b12; --warn-tint: #f9eeda;
+        --err: #c33025; --err-dark: #a62319; --err-tint: #fbe4e1; --info-tint: #e1ebfb;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --ink: #ededf0; --ink-2: #c6c6cc; --ink-3: #8b8b93; --ink-4: #6e6e76;
+          --surface: #1a1a1d; --paper: #161619; --fill: #242429; --hover: #202024;
+          --border: #2a2a2f; --border-strong: #3a3a41; --link: #71a9ff;
+          --ok: #4ec98a; --ok-dot: #39c07a; --ok-tint: #16271e;
+          --warn: #dca94f; --warn-tint: #2a2317;
+          --err: #f07c6b; --err-dark: #cb5647; --err-tint: #2e1b19; --info-tint: #19222f;
+        }
       }
       * { box-sizing: border-box; }
       body {
-        margin: 0; width: 320px; background: var(--gray-1); color: var(--gray-12);
-        font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        margin: 0; width: 320px; background: var(--surface); color: var(--ink);
+        font: 13px/1.4 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       }
-      header { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--gray-4); font-weight: 600; }
-      header img { width: 18px; height: 18px; }
-      header .version { margin-left: auto; font-weight: 400; font-size: 11px; color: var(--gray-11); }
+      header { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 14px; font-weight: 600; letter-spacing: -0.14px; }
+      header img { width: 20px; height: 20px; border-radius: 6px; }
+      header .version { margin-left: auto; font-weight: 400; font-size: 11px; letter-spacing: 0; color: var(--ink-3); }
       ol { list-style: none; margin: 0; padding: 4px 0; }
-      li { display: grid; grid-template-columns: 22px 1fr; column-gap: 10px; padding: 10px 16px; }
+      li { display: grid; grid-template-columns: 20px 1fr; column-gap: 12px; padding: 10px 16px; }
       .num {
-        width: 22px; height: 22px; display: grid; place-items: center; font-size: 11px; font-weight: 600;
-        border: 1px solid var(--gray-7); color: var(--gray-11); background: white;
+        width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%;
+        font-size: 11px; font-weight: 600; background: var(--fill); color: var(--ink-3);
       }
-      li.done .num { background: var(--green-9); border-color: var(--green-9); color: white; }
-      li.current .num { background: var(--accent-9); border-color: var(--accent-9); color: white; }
-      li.locked { opacity: 0.55; }
-      .title { font-weight: 600; line-height: 22px; }
-      .detail { grid-column: 2; color: var(--gray-11); font-size: 12px; }
-      .detail b { color: var(--gray-12); font-weight: 600; }
+      li.done .num { background: var(--ok-tint); color: var(--ok); font-size: 0; }
+      li.done .num::before { content: "\2713"; font-size: 11px; }
+      li.current .num { background: var(--ink); color: var(--surface); }
+      li.locked .title { color: var(--ink-3); }
+      li.locked .detail { color: var(--ink-4); }
+      .title { font-weight: 600; line-height: 20px; }
+      .detail { grid-column: 2; margin-top: 2px; color: var(--ink-3); font-size: 12px; }
+      .detail b { color: var(--ink-2); font-weight: 500; }
       .actions { grid-column: 2; display: flex; gap: 8px; margin-top: 8px; }
-      code { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--gray-3); padding: 1px 4px; }
-      .error { grid-column: 2; margin-top: 8px; padding: 6px 8px; background: var(--red-3); color: var(--red-11); font-size: 12px; }
-      .waiting { grid-column: 2; margin-top: 8px; padding: 6px 8px; background: var(--accent-3); color: var(--accent-11); font-size: 12px; }
+      .actions:not(:has(button:not([hidden]))) { display: none; }
+      code { font: 11px "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--fill); color: var(--ink-2); padding: 1px 4px; border-radius: 4px; }
+      .error { grid-column: 2; margin-top: 8px; padding: 6px 8px; border-radius: 6px; background: var(--err-tint); color: var(--err); font-size: 12px; }
+      .waiting { grid-column: 2; margin-top: 8px; padding: 6px 8px; border-radius: 6px; background: var(--info-tint); color: var(--ink-2); font-size: 12px; }
 
       button {
         all: unset; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
-        height: 28px; padding: 0 12px; border-radius: 0; font-size: 12px; font-weight: 500; cursor: pointer;
-        user-select: none; white-space: nowrap;
+        height: 28px; padding: 0 10px; border-radius: 4px; font-size: 12px; font-weight: 500; cursor: pointer;
+        user-select: none; white-space: nowrap; transition: background-color 0.12s, transform 0.12s;
       }
-      button:focus-visible { outline: 2px solid var(--accent-9); outline-offset: 1px; }
-      button:disabled { cursor: default; opacity: 0.5; }
-      .solid { background: var(--accent-9); color: white; }
-      .solid:hover:not(:disabled) { background: var(--accent-10); }
-      .soft { background: var(--accent-3); color: var(--accent-11); }
-      .soft:hover:not(:disabled) { background: var(--accent-4); }
-      .outline { box-shadow: inset 0 0 0 1px var(--gray-7); color: var(--gray-12); background: white; }
-      .outline:hover:not(:disabled) { background: var(--gray-3); }
-      .danger { background: var(--red-9); color: white; }
-      .danger:hover:not(:disabled) { background: var(--red-10); }
+      button:active:not(:disabled) { transform: scale(0.97); }
+      button:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; }
+      button:disabled { cursor: default; }
+      .solid { background: var(--ink); color: var(--surface); }
+      .solid:hover:not(:disabled) { background: var(--ink-2); }
+      .solid:disabled { background: var(--fill); color: var(--ink-4); }
+      .soft { background: var(--fill); color: var(--ink); }
+      .soft:hover:not(:disabled) { background: var(--border-strong); }
+      .outline { box-shadow: inset 0 0 0 1px var(--border-strong); color: var(--ink); }
+      .outline:hover:not(:disabled) { background: var(--hover); }
+      .danger { background: var(--err-tint); color: var(--err); }
+      .danger:hover:not(:disabled) { background: var(--err); color: var(--surface); }
 
-      .update { padding: 10px 16px 12px; background: var(--amber-3); border-bottom: 1px solid var(--amber-7); color: var(--amber-11); font-size: 12px; }
-      .update.required { background: var(--red-3); border-color: var(--red-6); color: var(--red-11); }
+      .update { padding: 10px 16px 12px; background: var(--warn-tint); border-bottom: 1px solid var(--border); color: var(--warn); font-size: 12px; }
+      .update.required { background: var(--err-tint); color: var(--err); }
       .update b { font-weight: 600; }
       .update .actions { margin-top: 8px; display: flex; gap: 8px; }
       .update .note { margin-top: 6px; }
-      section { border-top: 1px solid var(--gray-4); padding: 12px 16px 14px; }
+      section { border-top: 1px solid var(--border); padding: 12px 16px 14px; background: var(--paper); color: var(--ink-2); }
       section .row { display: flex; align-items: center; gap: 8px; }
-      .dot { width: 8px; height: 8px; background: var(--gray-8); flex: none; }
-      .dot.busy { background: var(--accent-9); }
-      .dot.bad { background: var(--red-9); }
+      .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-4); flex: none; }
+      .dot.busy { background: var(--ok-dot); }
+      .dot.bad { background: var(--err); }
       section .actions { margin-top: 10px; }
       [hidden] { display: none !important; }
     </style>
