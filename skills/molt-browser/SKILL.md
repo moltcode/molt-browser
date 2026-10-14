@@ -48,9 +48,10 @@ molt-browser click "Create account"
   pass `--tab ID` from `molt-browser tabs`. The user's foreground tab is
   never an implicit target. Each Molt session has its own tab, and a tab in
   use by another agent session is refused.
-- **Sharing the foreground.** If the user explicitly asks to work in the tab
-  they're viewing, pass `--allow-active` on each command. Otherwise, if they
-  switch to your tab, stop acting in it and wait for them to switch away.
+- **Foreground.** Your tab keeps working when the user switches to it to
+  watch. To work in a tab the user opened, pass `--tab ID`. If the user
+  turned on "Protect the tab I'm viewing" in the extension, commands on
+  the tab they're viewing fail with `active_tab`.
   `--focus` and `molt-browser focus` move the browser to the front; use only
   when the user asks to watch.
 - `text` returns readable page text, cheaper than a screenshot.
@@ -74,8 +75,9 @@ Console and network are recorded while molt-browser is attached to the tab
 
 - `stopped_by_user` means the user pressed Stop on that tab. Don't retry, and
   don't switch tabs to get around it. Ask the user.
-- `active_tab` means the user is viewing the target. Don't use
-  `--allow-active` unless they explicitly asked to share that tab.
+- `active_tab` means the user is viewing the target and protects it. Wait
+  for them to switch away; pass `--allow-active` only if they asked you to
+  share that tab.
 - Run `molt-browser release` when you're done with a tab. Debugging also
   detaches on its own 15 seconds after your last action.
 - Don't submit payments, send messages or delete data without the user's

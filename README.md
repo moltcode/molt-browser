@@ -105,10 +105,12 @@ All commands accept `--tab ID`, `--json` and `--timeout SECONDS`.
   Coordinate clicks must name the screenshot (`--capture`) they came from.
 - **Observation** (console, exceptions, network) is recorded from the moment
   the extension attaches to a tab.
-- **Foreground protection.** Each Molt session keeps its own background tab.
-  Commands never silently fall back to the tab you're using. If you switch
-  to an agent tab, further actions are refused until it is in the background again.
-  `--allow-active` is an explicit opt-in for sharing the foreground tab.
+- **Own tabs.** Each Molt session keeps its own background tab. Commands
+  never silently fall back to the tab you're using. Switching to an agent
+  tab to watch doesn't stop it; use Stop for that. Turn on **Protect the
+  tab I'm viewing** in the toolbar popup to have agents refused
+  (`active_tab`) in whatever tab you have in front; `--allow-active` lets a
+  command through when you asked an agent to share your tab.
 - **Stop.** The pill in the page, the toolbar popup, or cancelling Chrome's
   debugging bar all block agents on that tab until you re-allow it from the
   popup. Agents get `stopped_by_user`.

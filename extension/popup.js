@@ -94,6 +94,8 @@ async function render() {
   show("stop", !!t.controlled);
   show("allow", !!t.stopped);
 
+  $("protect-foreground").checked = !!s.protectForeground;
+
   $("stop").onclick = async () => {
     await chrome.runtime.sendMessage({ molt: "stop", tabId: tab.id });
     render();
@@ -110,6 +112,10 @@ $("connect").onclick = () => act("connect", "connect");
 $("cancel").onclick = () => act("cancel_connect", "connect");
 $("disconnect").onclick = () => act("disconnect", "connect");
 $("update-button").onclick = () => act("update", "update");
+$("protect-foreground").onchange = async (e) => {
+  await chrome.storage.local.set({ protectForeground: e.target.checked });
+  render();
+};
 
 render();
 // The bridge connects and the Molt app answers while the popup is open.

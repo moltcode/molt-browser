@@ -81,7 +81,8 @@ Setup
 
 Global flags
   --tab ID        target tab (see the default above)
-  --allow-active  share the foreground tab when the user explicitly asks
+  --allow-active  act in the user's foreground tab when the extension is set
+                  to protect it; only when the user asked to share it
   --json          print the raw JSON result
   --no-page       don't print the page after an action
   --timeout S     seconds to wait for the extension (default 60)
@@ -171,9 +172,11 @@ func main() {
 
 func buildRequest(cmd string, rest []string, a args) (string, map[string]any, error) {
 	// No session param: the extension takes the session from the grant.
-	p := map[string]any{}
+	// allow_active keeps extensions <= 0.4.1 from refusing the user's
+	// foreground tab; newer extensions ignore it.
+	p := map[string]any{"allow_active": true}
 	if a.has("allow-active") {
-		p["allow_active"] = true
+		p["share_active"] = true
 	}
 	if a.has("no-page") {
 		p["page"] = false

@@ -39,6 +39,8 @@ const unpacked = chrome.management
 // tabId -> { console: [], network: Map, captures: Map, lastCapture, cursor, lastUsed }
 const sessions = new Map();
 const allowActive = new Map();
+// Popup setting, off by default: refuse the tab the user is looking at.
+let protectForeground = false;
 // Tabs where the user pressed Stop (or cancelled the debugger bar).
 let stopped = new Set();
 // Each Molt session keeps its own tab. A single browser-wide default lets one
@@ -63,7 +65,8 @@ const ready = Promise.all([
     agentTabs = saved.agentTabs || {};
     tabOwners = saved.tabOwners || {};
   }),
-  chrome.storage.local.get(["pairing", "installId", "account"]).then(async (saved) => {
+  chrome.storage.local.get(["pairing", "installId", "account", "protectForeground"]).then(async (saved) => {
+    protectForeground = !!saved.protectForeground;
     pairing = saved.pairing || null;
     account = saved.account || null;
     // 0.3.0 paired locally, without the platform; that pairing no longer counts.
@@ -86,6 +89,7 @@ const ready = Promise.all([
 // Sign-in and sign-out in another extension page land here too.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && Object.hasOwn(changes, "account")) account = changes.account.newValue || null;
+  if (area === "local" && Object.hasOwn(changes, "protectForeground")) protectForeground = !!changes.protectForeground.newValue;
 });
 
 function persist() {
@@ -243,8 +247,11 @@ async function targetTab(params) {
   if (tabOwners[tab.id] && tabOwners[tab.id] !== owner) {
     fail("tab_in_use", `tab ${tab.id} belongs to another agent session; open your own tab`);
   }
-  if (!params.allow_active) await assertBackground(tab.id);
-  allowActive.set(tab.id, !!params.allow_active);
+  // share_active is --allow-active. allow_active is what extensions <= 0.4.1
+  // read, and the CLI now always sends it, so it no longer counts here.
+  const shared = !!params.share_active;
+  if (!shared) await assertBackground(tab.id);
+  allowActive.set(tab.id, shared);
   if (agentTabs[owner] !== tab.id || tabOwners[tab.id] !== owner) {
     agentTabs[owner] = tab.id;
     tabOwners[tab.id] = owner;
@@ -254,9 +261,10 @@ async function targetTab(params) {
 }
 
 async function assertBackground(tabId) {
+  if (!protectForeground) return;
   const [front] = await chrome.tabs.query({ active: true, lastFocusedWindow: true, windowType: "normal" });
   if (front?.id === tabId) {
-    fail("active_tab", `tab ${tabId} is the user's foreground tab. Work in a background tab, or pass --allow-active only when the user asked to share it.`);
+    fail("active_tab", `tab ${tabId} is the user's foreground tab and the Molt extension is set to protect it. Work in a background tab, or pass --allow-active only when the user asked to share it.`);
   }
 }
 
@@ -823,14 +831,14 @@ const handlers = {
   reload: (p) => navigateWith(p, "reloaded", (id) => chrome.tabs.reload(id)),
 
   async focus(p) {
-    const tab = await targetTab({ ...p, allow_active: true });
+    const tab = await targetTab({ ...p, share_active: true });
     await chrome.tabs.update(tab.id, { active: true });
     await chrome.windows.update(tab.windowId, { focused: true });
     return pageSummary(tab.id, "focused");
   },
 
   async release(p) {
-    const tab = await targetTab({ ...p, allow_active: true });
+    const tab = await targetTab({ ...p, share_active: true });
     const was = await detach(tab.id);
     forgetTab(tab.id);
     return { tab: tab.id, summary: was ? `released tab ${tab.id}` : `tab ${tab.id} was not under control` };
@@ -1220,6 +1228,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         updatePending,
         unpacked: await unpacked,
         account: account && { email: account.user.email, name: account.user.name },
+        protectForeground,
         pairing: pairing && { email: pairing.email, machine_name: pairing.machine_name, paired_at: pairing.paired_at },
         connecting: connecting && { state: connecting.state, error: connecting.error || null },
         tab: msg.tabId == null ? null : { controlled: sessions.has(msg.tabId), stopped: stopped.has(msg.tabId) },
