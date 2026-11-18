@@ -89,6 +89,8 @@ function platformVerify(req, body, res) {
     res.end(JSON.stringify({ valid: false, error: { code, message: code } }));
   };
   if (req.headers.authorization !== `Bearer ${extToken}`) return deny(401, "signed_out");
+  // The app's token names another Chrome install (auth's pair, S98).
+  if (JSON.parse(body).token === "connect-install") return deny(403, "install_mismatch");
   const owner = connectTokens[JSON.parse(body).token];
   if (!owner) return deny(401, "bad_connect_token");
   if (owner !== "user-1") return deny(403, "account_mismatch");
@@ -158,6 +160,8 @@ const proc = spawn(
     "--enable-unsafe-extension-debugging",
     "--no-first-run",
     "--no-default-browser-check",
+    // A test profile never touches the macOS Keychain.
+    "--use-mock-keychain",
     "--window-size=1200,800",
     ...(headed ? ["--window-position=3000,3000"] : ["--headless=new"]),
     "about:blank",
@@ -332,6 +336,17 @@ try {
   const intruderKey = generateKeyPairSync("ed25519").publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("base64url");
   expect((await runCli(["connect", JSON.stringify({ request_id: request.request_id, kid: pair.kid, public_key: intruderKey, token: "connect-ok" })], {})) === null, "a key other than the one the platform signed is refused");
 
+  // A connect token made for another Chrome install: the sign-in stays and
+  // the popup asks to connect again, Connect beside it.
+  request = await ask();
+  expect((await runCli(["connect", JSON.stringify({ request_id: request.request_id, kid: pair.kid, public_key: rawPublic, token: "connect-install" })], {})) === null, "a connect token for another Chrome install is refused");
+  expect(
+    await waitPopup(`(() => { const n = document.getElementById("connect-again"), c = document.getElementById("connect"); return !n.hidden && n.textContent.startsWith("Connect the Molt app again") && !c.hidden && !c.disabled && document.getElementById("connect-error").hidden; })()`),
+    "the popup asks to connect the Molt app again, with Connect"
+  );
+  expect(await inPopup(`document.getElementById("account-detail").textContent.includes("e2e@molt.test")`), "the sign-in stays");
+  await shot("4b-connect-again");
+
   request = await ask();
   const ack = JSON.parse((await runCli(["connect", JSON.stringify({ request_id: request.request_id, kid: pair.kid, public_key: rawPublic, token: "connect-ok" })], {})) || "{}");
   expect(ack.connected && ack.request_id === request.request_id && ack.user_id === "user-1" && ack.browser_install_id === request.browser_install_id && ack.machine_id === pair.machine_id, "Allow + platform verify connects this browser");
@@ -339,6 +354,8 @@ try {
   pair.browser_install_id = ack.browser_install_id;
   expect((await cli("status"))?.includes("connected as e2e@molt.test"), "status shows the connected account");
   expect(await waitPopup(`document.getElementById("connect-detail").textContent.includes("Connected to e2e")`), "popup shows the connection");
+  expect(await inPopup(`document.getElementById("connect-again").hidden`), "the new connection clears the ask");
+  expect(!(await swEval(`chrome.storage.local.get("reconnect").then((s) => s.reconnect)`)), "and its stored flag");
   await shot("5-connected");
   await cdp("Target.closeTarget", { targetId: popupTarget });
 
@@ -412,7 +429,10 @@ try {
   const iconAfter = await cdp("Runtime.evaluate", { expression: "Boolean(document.querySelector('link[data-molt-agent-favicon]'))", returnByValue: true }, sessionId);
   expect(iconAfter.result.value === false, "release restores the page favicon");
   await cdp("Target.activateTarget", { targetId: target.targetId });
-  expect((await cli("click", "--tab", tabId, "Greet")) === null, "the user's foreground tab refuses an agent click");
+  // Off by default since 0.4.2: only "Protect the tab I'm viewing" refuses it.
+  await swEval(`chrome.storage.local.set({ protectForeground: true })`);
+  expect((await cli("click", "--tab", tabId, "Greet")) === null, "with protection on, the user's foreground tab refuses an agent click");
+  await swEval(`chrome.storage.local.set({ protectForeground: false })`);
 
   }
   // A whole form in three calls: open, fill, click. No snapshot, no refs,
