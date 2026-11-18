@@ -57,7 +57,10 @@ when the command carries a grant that app signed:
   platform checks both signatures and compares the two account ids in
   constant time (no database lookup). Only then does Chrome store the app's
   key. The private key stays with the app, so nothing in the Chrome profile
-  can mint grants.
+  can mint grants. If the platform answers 403 `install_mismatch` (the
+  app's token names another Chrome install), Chrome drops its connection,
+  keeps its sign-in, and the popup asks to connect again until a new
+  connection succeeds.
 - **Grants** are signed for one Molt agent session and live 5 minutes. The
   CLI fetches a fresh one per command with the session's
   `MOLT_BROWSER_LEASE`; the app signs only while its signed-in user is the

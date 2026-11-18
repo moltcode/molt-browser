@@ -50,7 +50,7 @@
       .actions:not(:has(button:not([hidden]))) { display: none; }
       code { font: 11px "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--fill); color: var(--ink-2); padding: 1px 4px; border-radius: 4px; }
       .error { grid-column: 2; margin-top: 8px; padding: 6px 8px; border-radius: 6px; background: var(--err-tint); color: var(--err); font-size: 12px; }
-      .waiting { grid-column: 2; margin-top: 8px; padding: 6px 8px; border-radius: 6px; background: var(--info-tint); color: var(--ink-2); font-size: 12px; }
+      .waiting, .notice { grid-column: 2; margin-top: 8px; padding: 6px 8px; border-radius: 6px; background: var(--info-tint); color: var(--ink-2); font-size: 12px; }
 
       button {
         all: unset; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
@@ -116,6 +116,7 @@
         <span class="title">Connect to the Molt app</span>
         <span id="connect-detail" class="detail"></span>
         <div id="connect-waiting" class="waiting" hidden></div>
+        <div id="connect-again" class="notice" hidden></div>
         <div class="actions">
           <button id="connect" class="solid" hidden>Connect</button>
           <button id="cancel" class="outline" hidden>Cancel</button>

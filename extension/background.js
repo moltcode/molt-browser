@@ -58,6 +58,10 @@ let account = null;
 // last one's outcome: { request_id, state: "waiting" | "verifying" | "failed", error }.
 let connecting = null;
 const CONNECT_TTL_MS = 2 * 60 * 1000;
+// Set when the platform said the app's connect token names another Chrome
+// install: the connection here is stale and the popup asks to connect again
+// until a pairing succeeds. The sign-in stays.
+let reconnect = false;
 
 const ready = Promise.all([
   chrome.storage.session.get(["stopped", "agentTabs", "tabOwners"]).then((saved) => {
@@ -65,10 +69,11 @@ const ready = Promise.all([
     agentTabs = saved.agentTabs || {};
     tabOwners = saved.tabOwners || {};
   }),
-  chrome.storage.local.get(["pairing", "installId", "account", "protectForeground"]).then(async (saved) => {
+  chrome.storage.local.get(["pairing", "installId", "account", "protectForeground", "reconnect"]).then(async (saved) => {
     protectForeground = !!saved.protectForeground;
     pairing = saved.pairing || null;
     account = saved.account || null;
+    reconnect = saved.reconnect === true;
     // 0.3.0 paired locally, without the platform; that pairing no longer counts.
     if (pairing && pairing.verified !== VERIFIED) {
       pairing = null;
@@ -649,7 +654,14 @@ const control = {
         browser_install_id: installId,
       };
     } catch (e) {
-      connecting = { ...request, state: "failed", error: e.message };
+      // A stale connection is dropped and the popup asks to connect again,
+      // unless a newer request took over meanwhile. Anything else shows the
+      // failure itself.
+      if (!e.reconnect) connecting = { ...request, state: "failed", error: e.message };
+      else if (connecting?.request_id === request.request_id) {
+        connecting = null;
+        await dropStaleConnection();
+      }
       throw e;
     }
   },
@@ -707,15 +719,32 @@ async function platformVerify(token) {
   if (!res.ok) {
     const code = body?.error?.code || "bad_connection";
     if (code === "signed_out") await signOut();
-    deny(code, body?.error?.message || `the platform refused the connection (HTTP ${res.status})`);
+    const e = new AuthError(code, body?.error?.message || `the platform refused the connection (HTTP ${res.status})`);
+    // The app's connect token was made for another Chrome install: this
+    // browser's connection is stale, its sign-in is not.
+    e.reconnect = res.status === 403 && code === "install_mismatch";
+    throw e;
   }
   return body;
+}
+
+async function dropStaleConnection() {
+  await setReconnect(true);
+  if (pairing) await clearPairing();
+}
+
+async function setReconnect(on) {
+  if (reconnect === on) return;
+  reconnect = on;
+  if (on) await chrome.storage.local.set({ reconnect });
+  else await chrome.storage.local.remove("reconnect");
 }
 
 async function storePairing(next) {
   const previous = pairing;
   pairing = { ...next, paired_at: Date.now() };
   await chrome.storage.local.set({ pairing });
+  await setReconnect(false);
   if (previous) for (const tabId of [...sessions.keys()]) await detach(tabId);
   sendHello();
 }
@@ -768,6 +797,7 @@ async function signOut() {
   account = null;
   connecting = null;
   await chrome.storage.local.remove("account");
+  await setReconnect(false);
   if (pairing) await clearPairing();
 }
 
@@ -1231,6 +1261,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         protectForeground,
         pairing: pairing && { email: pairing.email, machine_name: pairing.machine_name, paired_at: pairing.paired_at },
         connecting: connecting && { state: connecting.state, error: connecting.error || null },
+        reconnect: reconnect && !pairing,
         tab: msg.tabId == null ? null : { controlled: sessions.has(msg.tabId), stopped: stopped.has(msg.tabId) },
       });
     });

@@ -81,6 +81,9 @@ async function render() {
   const connectError = actionError.connect || (c?.state === "failed" ? c.error : null);
   show("connect-error", !!connectError && !paired);
   $("connect-error").textContent = connectError || "";
+  // The platform found this browser's connection stale; a new pairing clears it.
+  show("connect-again", !!s.reconnect && !paired && !waiting && !connectError);
+  $("connect-again").textContent = "Connect the Molt app again. Click Connect, then Allow in the app.";
 
   // This tab
   const t = s.tab || {};
