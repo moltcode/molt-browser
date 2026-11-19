@@ -12,6 +12,9 @@
 // answers it with a connect token, and mints grants for agent sessions over
 // the same HTTP endpoint shape the backend serves; the platform's
 // /api/browser/verify checks that token against the extension's sign-in.
+// A second server plays Molt Auth (test/fake-auth.mjs, the real protocol):
+// the extension is pointed at it from the start, and must not call it until
+// the platform answers an account's sign-in with 403 auth_required.
 import { spawn, execFile } from "node:child_process";
 import { generateKeyPairSync, randomUUID, sign as edSign } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
@@ -19,6 +22,7 @@ import { createServer } from "node:http";
 import { connect as netConnect } from "node:net";
 import { tmpdir, platform, arch } from "node:os";
 import { join, resolve } from "node:path";
+import { fakeAuth } from "../test/fake-auth.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const headed = process.argv.includes("--headed");
@@ -81,13 +85,33 @@ const leaseFor = (session) => `lease-${session}`;
 const extToken = "ext-token-user-1";
 const connectTokens = { "connect-ok": "user-1", "connect-other": "user-2" };
 let lastRequest = null;
+// Which account the platform's redirect login signs in: "user-1" has no
+// sealed workspace; "sealed" holds an auth session, so the platform mints it
+// no extension token (403 auth_required) and the extension goes to auth.
+let platformLogin = "user-1";
+let auth = null;
+const authBearer = (req) => {
+  const token = (req.headers.authorization || "").replace(/^Bearer /, "");
+  try {
+    return JSON.parse(Buffer.from(token.split(".")[0], "base64url")).typ === "molt-browser" ? token : null;
+  } catch {
+    return null;
+  }
+};
 
-function platformVerify(req, body, res) {
+async function platformVerify(req, body, res) {
   res.setHeader("content-type", "application/json");
   const deny = (status, code) => {
     res.statusCode = status;
     res.end(JSON.stringify({ valid: false, error: { code, message: code } }));
   };
+  // Auth's pair (S98): checked with auth's keys, install included.
+  const bearer = authBearer(req);
+  if (bearer) {
+    const r = await auth.verifyPair(bearer, JSON.parse(body).token);
+    if (r.ok) return res.end(JSON.stringify(r.ok));
+    return r.error === "bad_extension_token" ? deny(401, "signed_out") : deny(r.error === "bad_connect_token" ? 401 : 403, r.error);
+  }
   if (req.headers.authorization !== `Bearer ${extToken}`) return deny(401, "signed_out");
   // The app's token names another Chrome install (auth's pair, S98).
   if (JSON.parse(body).token === "connect-install") return deny(403, "install_mismatch");
@@ -124,10 +148,14 @@ const server = createServer((req, res) => {
   if (req.url.startsWith("/auth/redirect")) {
     const returnUrl = new URL(req.url, base).searchParams.get("return_url");
     res.setHeader("content-type", "text/html");
-    return res.end(`<script>const u = new URL(${JSON.stringify(returnUrl)}); u.searchParams.set("token", "platform-jwt-user-1"); location.href = u.toString();</script>`);
+    return res.end(`<script>const u = new URL(${JSON.stringify(returnUrl)}); u.searchParams.set("token", ${JSON.stringify(`platform-jwt-${platformLogin}`)}); location.href = u.toString();</script>`);
   }
   if (req.url === "/api/browser/session" && req.method === "POST") {
     res.setHeader("content-type", "application/json");
+    if (req.headers.authorization === "Bearer platform-jwt-sealed") {
+      res.statusCode = 403;
+      return res.end(JSON.stringify({ valid: false, error: { code: "auth_required", message: "This account signs in to Chrome through Molt Auth" } }));
+    }
     if (req.headers.authorization !== "Bearer platform-jwt-user-1") {
       res.statusCode = 401;
       return res.end(JSON.stringify({ valid: false, error: { code: "unauthenticated", message: "Sign in to Molt first" } }));
@@ -151,6 +179,13 @@ const server = createServer((req, res) => {
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${server.address().port}`;
+const authServer = createServer((req, res) => {
+  let body = "";
+  req.on("data", (c) => (body += c));
+  req.on("end", () => auth.node(req, res, body));
+});
+await new Promise((r) => authServer.listen(0, "127.0.0.1", r));
+auth = await fakeAuth({ base: `http://127.0.0.1:${authServer.address().port}`, users: { "user-sealed": "sealed@molt.test" } });
 
 const proc = spawn(
   chrome,
@@ -258,7 +293,7 @@ try {
     await cdp("Target.detachFromTarget", { sessionId }).catch(() => {});
     return r.result?.value;
   };
-  await swEval(`chrome.storage.local.set({ platformUrl: ${JSON.stringify(base)} })`);
+  await swEval(`chrome.storage.local.set({ platformUrl: ${JSON.stringify(base)}, authUrl: ${JSON.stringify(auth.base)}, authKeys: ${JSON.stringify(auth.keysText)} })`);
   // The popup's steps: signed in, Connect enabled.
   let popupTarget, popup;
   const openPopup = async () => {
@@ -516,10 +551,79 @@ try {
   expect((await statusJson(bin)).update === "none", "the matching plugin sees no update");
   expect(await waitPopup(`document.getElementById("update").hidden`, 120), "the popup notice clears once the plugin matches again");
   expect((await swEval(`chrome.action.getBadgeText({})`)) === "", "the badge clears");
+
+  // -- An account with a sealed workspace: Molt Auth (S98, S220) -------------
+  // Everything above ran with auth configured and an account the platform
+  // signs in itself: auth heard nothing.
+  expect(auth.requests.length === 0, `an account with no sealed workspace never reaches auth (${auth.requests.length} requests)`);
+  await inPopup(`document.getElementById("sign-out").click()`);
+  expect(await waitPopup(`!document.getElementById("sign-in").hidden`), "signed out");
+  platformLogin = "sealed";
+  const beforeAuth = new Set((await cdp("Target.getTargets")).targetInfos.map((t) => t.targetId));
+  await inPopup(`document.getElementById("sign-in").click()`);
+  let landing = null;
+  for (let i = 0; i < 40 && !landing; i++) {
+    await sleep(250);
+    landing = (await cdp("Target.getTargets")).targetInfos.find((t) => !beforeAuth.has(t.targetId) && t.url.startsWith(signedInUrl));
+  }
+  expect(!!landing, "the platform's sign-in comes back to the signed-in page");
+  const { sessionId: landingSession } = await cdp("Target.attachToTarget", { targetId: landing.targetId, flatten: true });
+  const inLanding = async (expression) => (await cdp("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, landingSession)).result?.value;
+  let offered = false;
+  for (let i = 0; i < 40 && !offered; i++) {
+    await sleep(250);
+    offered = await inLanding(`!document.getElementById("auth").hidden && !document.getElementById("auth-dev").hidden`);
+  }
+  expect(offered, "the platform's auth_required: the signed-in page offers Molt Auth's sign-in");
+  expect(auth.requests.length === 0, "and nothing has reached auth before the person chooses");
+  expect(await waitPopup(`!document.getElementById("auth-dev").hidden && document.getElementById("sign-in").hidden`), "the popup offers it too");
+  await shot("7-auth-choose");
+  await inLanding(`document.getElementById("auth-dev").click()`);
+  expect(
+    await waitPopup(`document.getElementById("account-detail").textContent.includes("sealed@molt.test")`, 60),
+    "auth's page finishes, and the poll signs the extension in at auth with its own device"
+  );
+  await cdp("Target.closeTarget", { targetId: landing.targetId }).catch(() => {});
+  const starts = auth.requests.filter((r) => r.path === "/v1/sign-in/start").length;
+  const tokens = auth.requests.filter((r) => r.path === "/v1/browser/extension-token").length;
+  expect(starts === 1 && tokens === 1, `one sign-in and one extension token at auth (${starts}, ${tokens})`);
+  const authAccount = await swEval(`chrome.storage.local.get(["account", "authSession"]).then((s) => ({ auth: s.account?.auth, user: s.account?.user?.id, typ: JSON.parse(atob(s.account.token.split(".")[0].replace(/-/g, "+").replace(/_/g, "/"))).typ, keys: Object.keys(s.authSession || {}).sort().join(",") }))`);
+  expect(authAccount?.auth === true && authAccount.user === "user-sealed" && authAccount.typ === "molt-browser", "the stored token is auth's molt-browser token for that account");
+  expect(authAccount?.keys === "device_id,email,sid,user_id", "no session token is kept, only its ids");
+  const nonExtractable = await swEval(`new Promise((ok) => { const r = indexedDB.open("molt-auth"); r.onsuccess = () => { const g = r.result.transaction("kv").objectStore("kv").get("device"); g.onsuccess = () => ok(g.result.sig.privateKey.extractable === false && g.result.enc.privateKey.extractable === false); }; })`);
+  expect(nonExtractable === true, "the device keys are non-extractable CryptoKeys in IndexedDB");
+
+  // The app's connect token, from auth (browser_pairing.ex asks it there).
+  const appToken = await auth.appDevice("user-sealed");
+  request = await ask();
+  expect(request?.user?.id === "user-sealed" && request?.user?.email === "sealed@molt.test", "watch gets the request with the auth account");
+  const wrongInstall = await appToken({ machine_id: pair.machine_id, request_id: request.request_id, browser_install_id: "another-install", kid: pair.kid, public_key: rawPublic, machine_name: "e2e" });
+  expect((await runCli(["connect", JSON.stringify({ request_id: request.request_id, kid: pair.kid, public_key: rawPublic, token: wrongInstall })], {})) === null, "auth's connect token for another Chrome install is refused (install_mismatch)");
+  expect(
+    await waitPopup(`(() => { const n = document.getElementById("connect-again"), c = document.getElementById("connect"); return !n.hidden && !c.hidden && !c.disabled; })()`),
+    "the popup asks to connect the Molt app again after auth's install_mismatch"
+  );
+  expect(await inPopup(`document.getElementById("account-detail").textContent.includes("sealed@molt.test")`), "the auth sign-in stays");
+  await shot("8-auth-connect-again");
+  request = await ask();
+  const rightInstall = await appToken({ machine_id: pair.machine_id, request_id: request.request_id, browser_install_id: request.browser_install_id, kid: pair.kid, public_key: rawPublic, machine_name: "e2e" });
+  const authAck = JSON.parse((await runCli(["connect", JSON.stringify({ request_id: request.request_id, kid: pair.kid, public_key: rawPublic, token: rightInstall })], {})) || "{}");
+  expect(authAck.connected && authAck.user_id === "user-sealed" && authAck.machine_id === pair.machine_id, "auth's pair, verified at the platform, connects this browser");
+  Object.assign(pair, { pair_id: request.request_id, user_id: "user-sealed", browser_install_id: authAck.browser_install_id });
+  expect((await raw({ method: "tabs", grant: mint("x") })).ok === true, "the app's grant drives the browser paired through auth");
+  expect(await waitPopup(`document.getElementById("connect-detail").textContent.includes("Connected to e2e")`), "popup shows the connection");
+  await shot("9-auth-connected");
+  const sid = await swEval(`chrome.storage.local.get("authSession").then((s) => s.authSession.sid)`);
+  await inPopup(`document.getElementById("sign-out").click()`);
+  expect(await waitPopup(`!document.getElementById("sign-in").hidden`), "signing out in the extension");
+  for (let i = 0; i < 20 && !auth.revoked.includes(sid); i++) await sleep(250);
+  expect(auth.revoked.includes(sid), "ends the auth session at auth");
+  expect((await raw({ method: "tabs", grant: mint("x") })).error?.code === "unpaired", "and the pairing");
   await cdp("Target.closeTarget", { targetId: popupTarget });
 } finally {
   proc.kill();
   server.close();
+  authServer.close();
   await sleep(1000);
   if (failures === 0 && !process.env.KEEP) rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
   else console.log(`kept ${tmp}`);
