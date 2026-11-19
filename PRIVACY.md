@@ -22,7 +22,10 @@ Code) never receive page data from the extension.
 The extension talks to the Molt Code platform (platform.moltcode.com) only to
 sign you in and to confirm that the Molt Code app asking to connect is signed
 in to the same account. Those calls carry your sign-in token and the app's
-connect token, nothing from any page.
+connect token, nothing from any page. For an account with a sealed
+workspace it signs in at Molt Auth instead, with a key this browser makes
+and never exports; those calls carry that key's signatures and this
+browser profile's id, nothing from any page.
 
 What the Molt Code app and your agents then do with page content is covered
 by their own settings and the AI provider you chose to use with them.
@@ -34,6 +37,9 @@ In Chrome's local storage, until you sign out or disconnect:
 - a Molt sign-in token for this browser, with your account id, email and name
 - the connected Molt Code app's public key and machine name
 - a random id for this browser profile
+- for a Molt Auth sign-in: the session's account, device and session ids
+  (no session token), and in IndexedDB this browser's two device keys
+  (non-extractable)
 
 In Chrome's session storage, which is cleared when the browser closes:
 

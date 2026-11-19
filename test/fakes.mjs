@@ -58,8 +58,44 @@ function hostPort() {
 
 const EXT = "molt-test-extension";
 
-export function fakeChrome({ local = {}, session = {} } = {}) {
+// IndexedDB with what molt-auth.js's store uses: one database, one object
+// store, get/put/delete. Values are kept as they are (CryptoKeys included).
+export function fakeIndexedDB() {
+  const dbs = new Map();
+  return {
+    dbs,
+    open(name) {
+      const req = {};
+      setImmediate(() => {
+        const fresh = !dbs.has(name);
+        if (fresh) dbs.set(name, new Map());
+        const stores = dbs.get(name);
+        req.result = {
+          createObjectStore: (n) => stores.set(n, new Map()),
+          transaction(n) {
+            const data = stores.get(n);
+            const t = {
+              objectStore: () => ({
+                get: (k) => ({ result: data.get(k) }),
+                put: (v, k) => (data.set(k, v), {}),
+                delete: (k) => (data.delete(k), {}),
+              }),
+            };
+            setImmediate(() => t.oncomplete?.());
+            return t;
+          },
+        };
+        if (fresh) req.onupgradeneeded?.();
+        req.onsuccess?.();
+      });
+      return req;
+    },
+  };
+}
+
+export function fakeChrome({ local = {}, session = {}, idb = fakeIndexedDB() } = {}) {
   const ports = [];
+  const opened = [];
   const chrome = {
     runtime: {
       id: EXT,
@@ -84,21 +120,32 @@ export function fakeChrome({ local = {}, session = {} } = {}) {
     storage: { local: area(local), session: area(session), onChanged: events() },
     alarms: { create() {}, onAlarm: events() },
     action: { setBadgeText() {}, setTitle() {}, setBadgeBackgroundColor() {}, setBadgeTextColor() {} },
-    tabs: { query: async () => [], get: async () => null, onRemoved: events(), onUpdated: events() },
+    tabs: {
+      query: async () => [],
+      get: async () => null,
+      create: async ({ url }) => (opened.push({ url }), { id: 100 + opened.length }),
+      update: async (id, { url }) => (opened.push({ id, url }), { id }),
+      onRemoved: events(),
+      onUpdated: events(),
+    },
     debugger: { detach: async () => {}, onDetach: events(), onEvent: events() },
   };
   return {
     chrome,
+    idb,
+    // Tabs the extension opened or navigated: { url, id? }.
+    opened,
     local: chrome.storage.local.data,
+    session: chrome.storage.session.data,
     // The native host the service worker connected to at load.
     get port() {
       return ports.at(-1);
     },
     // A message from one of the extension's own pages, answered by the
     // service worker's sendResponse.
-    send(msg, page = "popup.html") {
+    send(msg, page = "popup.html", tab = null) {
       return new Promise((resolve) => {
-        const sender = { id: EXT, url: chrome.runtime.getURL(page) };
+        const sender = { id: EXT, url: chrome.runtime.getURL(page), tab };
         for (const f of chrome.runtime.onMessage.fns) f(msg, sender, resolve);
       });
     },
@@ -123,7 +170,7 @@ let loads = 0;
 // the platform. Its periodic timers are created stopped: tests wait on the
 // messages it posts, never on the clock.
 export async function loadServiceWorker(t, fake, fetch) {
-  const restore = withGlobals({ chrome: fake.chrome, fetch });
+  const restore = withGlobals({ chrome: fake.chrome, fetch, indexedDB: fake.idb });
   t.after(restore);
   const realSetInterval = globalThis.setInterval;
   globalThis.setInterval = () => 0;

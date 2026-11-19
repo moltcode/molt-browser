@@ -13,6 +13,7 @@
 // the only owner tab scoping ever sees.
 
 import { AuthError, PLATFORM_URL, PROTOCOL, VERIFIED, checkConnection, sameId, verifyGrant, verifyRevoke } from "./auth.js";
+import { RENEW_BEFORE, authClient, authConfig, idbStore } from "./molt-auth.js";
 import { extensionUpdate } from "./update.js";
 
 const HOST = "com.moltcode.browser";
@@ -51,9 +52,21 @@ let tabOwners = {};
 // install id, which every grant must name.
 let pairing = null;
 let installId = null;
-// This browser's own Molt sign-in: { token, expires_at, user }. The token is
-// good only for the platform's browser verify API.
+// This browser's own Molt sign-in: { token, expires_at, user, auth? }. The
+// token is good only for the platform's browser verify API: the platform's
+// extension token, or (`auth: true`) the one Molt Auth issued this browser's
+// device (molt-auth.js) for an account the platform sends there.
 let account = null;
+// Molt Auth (molt-auth.js), dormant until the platform answers the sign-in
+// with 403 auth_required. `authRequired`: it did, and this browser has not
+// signed in there yet. `authSession`: the auth session this browser signed in
+// with ({ sid, user_id, device_id, email }, no tokens), for sign-out.
+// `authSignIn`: the sign-in waiting in a tab ({ id, url, interval, deadline }).
+let authRequired = false;
+let authSession = null;
+let authSignIn = null;
+let authError = null;
+const authStore = idbStore();
 // The connect request waiting for the user's Allow in the Molt app, or the
 // last one's outcome: { request_id, state: "waiting" | "verifying" | "failed", error }.
 let connecting = null;
@@ -64,22 +77,28 @@ const CONNECT_TTL_MS = 2 * 60 * 1000;
 let reconnect = false;
 
 const ready = Promise.all([
-  chrome.storage.session.get(["stopped", "agentTabs", "tabOwners"]).then((saved) => {
+  chrome.storage.session.get(["stopped", "agentTabs", "tabOwners", "authSignIn"]).then((saved) => {
     stopped = new Set(saved.stopped || []);
     agentTabs = saved.agentTabs || {};
     tabOwners = saved.tabOwners || {};
+    // A sign-in at Molt Auth outlives a service worker restart.
+    if (saved.authSignIn?.deadline > Date.now() / 1000) authSignIn = saved.authSignIn;
   }),
-  chrome.storage.local.get(["pairing", "installId", "account", "protectForeground", "reconnect"]).then(async (saved) => {
+  chrome.storage.local.get(["pairing", "installId", "account", "protectForeground", "reconnect", "authRequired", "authSession"]).then(async (saved) => {
     protectForeground = !!saved.protectForeground;
     pairing = saved.pairing || null;
     account = saved.account || null;
     reconnect = saved.reconnect === true;
+    authRequired = saved.authRequired === true;
+    authSession = saved.authSession || null;
     // 0.3.0 paired locally, without the platform; that pairing no longer counts.
     if (pairing && pairing.verified !== VERIFIED) {
       pairing = null;
       await chrome.storage.local.remove("pairing");
     }
-    if (account && !(account.expires_at > Date.now() / 1000)) {
+    // An expired auth token is asked again before its next use; any other
+    // expired sign-in is gone.
+    if (account && !(account.expires_at > Date.now() / 1000) && !(account.auth && authSession)) {
       account = null;
       await chrome.storage.local.remove("account");
     }
@@ -90,6 +109,12 @@ const ready = Promise.all([
     }
   }),
 ]);
+
+// A sign-in at Molt Auth that was waiting when the service worker stopped
+// goes on polling.
+ready.then(() => {
+  if (authSignIn) scheduleAuthPoll(authSignIn.id);
+});
 
 // Sign-in and sign-out in another extension page land here too.
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -641,6 +666,7 @@ const control = {
     if (!account) deny("signed_out", "sign in to Molt in the extension first");
     connecting = { ...request, state: "verifying" };
     try {
+      await freshAccount();
       const verified = await platformVerify(params.token);
       const next = checkConnection(verified, { request, account, installId, params });
       await storePairing(next);
@@ -780,9 +806,155 @@ async function finishSignIn({ token, state }) {
     body: "{}",
   });
   const body = await res.json().catch(() => ({}));
+  // The account signs in to Chrome through Molt Auth (a workspace of its is
+  // sealed, S98): the platform mints no extension token for it.
+  if (res.status === 403 && body?.error?.code === "auth_required") {
+    await setAuthRequired(true);
+    const config = await authSettings();
+    return { authRequired: true, reachable: !!config, providers: config ? config.providers : [] };
+  }
   if (!res.ok || !body.token || !body.user?.id) throw new Error(body?.error?.message || `Sign-in failed (HTTP ${res.status}).`);
   await setAccount({ token: body.token, expires_at: body.expires_at, user: body.user });
   return { email: body.user.email || body.user.name || null };
+}
+
+// -- Molt Auth (molt-auth.js) ------------------------------------------------------
+
+const AUTH_UNREACHABLE = "This account signs in through Molt Auth, which this version of the extension cannot reach yet.";
+
+async function authSettings() {
+  return authConfig(await chrome.storage.local.get(["authUrl", "authKeys"]));
+}
+
+// Only ever called once the platform sent this account to auth, or while
+// this browser holds an auth sign-in: the dormant rule.
+async function authApi() {
+  if (!authRequired && !authSession && !account?.auth) deny("signed_out", "sign in to Molt first");
+  const config = await authSettings();
+  if (!config) throw new Error(AUTH_UNREACHABLE);
+  return authClient({ fetch: (...args) => globalThis.fetch(...args), store: authStore, config });
+}
+
+async function setAuthRequired(on) {
+  authRequired = on;
+  if (on) await chrome.storage.local.set({ authRequired });
+  else await chrome.storage.local.remove("authRequired");
+}
+
+async function setAuthSignIn(next) {
+  authSignIn = next;
+  if (next) await chrome.storage.session.set({ authSignIn });
+  else await chrome.storage.session.remove("authSignIn");
+}
+
+// Starts a sign-in at Molt Auth and opens its page: in `tabId` (the
+// signed-in page that offered it), else in a new tab.
+async function startAuthSignIn(provider, tabId) {
+  const api = await authApi();
+  authError = null;
+  if (authPoll) clearTimeout(authPoll);
+  const s = await api.startSignIn(provider);
+  await setAuthSignIn({ id: s.id, url: s.url, interval: s.interval, deadline: s.deadline });
+  if (tabId != null) await chrome.tabs.update(tabId, { url: s.url });
+  else await chrome.tabs.create({ url: s.url });
+  scheduleAuthPoll(s.id);
+}
+
+async function reopenAuthSignIn() {
+  if (!authSignIn) deny("signed_out", "no sign-in is waiting");
+  await chrome.tabs.create({ url: authSignIn.url });
+}
+
+async function cancelAuthSignIn() {
+  if (authPoll) clearTimeout(authPoll);
+  authError = null;
+  await setAuthSignIn(null);
+  if (!account) await setAuthRequired(false);
+}
+
+let authPoll = null;
+
+function scheduleAuthPoll(id) {
+  if (authPoll) clearTimeout(authPoll);
+  if (!authSignIn || authSignIn.id !== id) return;
+  authPoll = setTimeout(() => {
+    authPoll = null;
+    pollAuthSignIn(id);
+  }, authSignIn.interval * 1000);
+}
+
+async function endAuthSignIn(error) {
+  authError = error;
+  await setAuthSignIn(null);
+}
+
+const AUTH_ENDED = {
+  device_key_retired: "Molt Auth no longer accepts this browser's key. Sign in again; it makes a new one.",
+  conflict: "This sign-in matches more than one Molt account. Sign in from a device you already use.",
+};
+
+async function pollAuthSignIn(id) {
+  if (!authSignIn || authSignIn.id !== id) return;
+  if (Date.now() / 1000 >= authSignIn.deadline) return endAuthSignIn("The sign-in expired. Start it again.");
+  let r;
+  try {
+    r = await (await authApi()).pollSignIn(id);
+  } catch (e) {
+    // The network: try again at the next interval. Anything else ends it.
+    if (e.code === "unreachable" || e.code === "timeout") return scheduleAuthPoll(id);
+    return authSignIn?.id === id ? endAuthSignIn(`Signing in to Molt Auth failed (${e.code || "error"}).`) : undefined;
+  }
+  // Cancelled or replaced meanwhile: this answer is not current.
+  if (!authSignIn || authSignIn.id !== id) return;
+  if (r.status === "complete") {
+    try {
+      await finishAuthSignIn(r.session);
+    } catch (e) {
+      await endAuthSignIn(e.message || "Signing in to Molt Auth failed.");
+    }
+    return;
+  }
+  if (r.status === "denied") return endAuthSignIn(AUTH_ENDED[r.reason] || "Molt Auth refused the sign-in.");
+  if (r.status === "expired") return endAuthSignIn("The sign-in expired. Start it again.");
+  scheduleAuthPoll(id);
+}
+
+// The sign-in is done: this browser's device asks auth for its extension
+// token, which then stands where the platform's would.
+async function finishAuthSignIn(session) {
+  await setAuthSignIn(null);
+  authSession = session;
+  await chrome.storage.local.set({ authSession });
+  const t = await (await authApi()).extensionToken(installId);
+  if (!sameId(t.user_id, session.user_id)) throw new Error("Molt Auth answered for another account.");
+  await setAccount({ token: t.token, expires_at: t.expires_at, user: { id: t.user_id, email: session.email, name: null }, auth: true });
+  await setAuthRequired(false);
+  authError = null;
+}
+
+// The account before its token is used: an auth token near its end is asked
+// again from this browser's device. A device auth removed signs out.
+async function freshAccount() {
+  if (!account?.auth) return account;
+  const now = Math.floor(Date.now() / 1000);
+  if (account.expires_at - now > RENEW_BEFORE) return account;
+  try {
+    const t = await (await authApi()).extensionToken(installId);
+    if (!sameId(t.user_id, account.user.id)) {
+      await signOut();
+      deny("signed_out", "Molt Auth answered for another account; sign in again");
+    }
+    account = { ...account, token: t.token, expires_at: t.expires_at };
+    await chrome.storage.local.set({ account });
+  } catch (e) {
+    if (e instanceof AuthError) throw e;
+    if (e.status === 401 || e.status === 403 || !(account.expires_at > now)) {
+      await signOut();
+      deny("signed_out", "Sign in to Molt in the extension again");
+    }
+    // Still live: the old token serves until the next try.
+  }
+  return account;
 }
 
 async function setAccount(next) {
@@ -794,11 +966,20 @@ async function setAccount(next) {
 }
 
 async function signOut() {
+  const session = authSession;
+  const api = session ? await authApi().catch(() => null) : null;
   account = null;
   connecting = null;
-  await chrome.storage.local.remove("account");
+  authSession = null;
+  authError = null;
+  if (authPoll) clearTimeout(authPoll);
+  await chrome.storage.local.remove(["account", "authSession"]);
+  await setAuthRequired(false);
+  await setAuthSignIn(null);
   await setReconnect(false);
   if (pairing) await clearPairing();
+  // Best effort, after the sign-out here is done: auth ends the session.
+  if (api) await api.signOut(session.sid);
 }
 
 // Asks the Molt app on this computer to connect. The host holds the request
@@ -1208,6 +1389,9 @@ const fromExtensionPage = (sender, page) => sender.id === chrome.runtime.id && s
 const popupActions = {
   sign_in: signIn,
   sign_out: signOut,
+  auth_sign_in: (msg) => startAuthSignIn(msg.provider, null),
+  auth_reopen: reopenAuthSignIn,
+  auth_cancel: cancelAuthSignIn,
   connect: async () => requestConnect(),
   cancel_connect: async () => cancelConnect(),
   disconnect: clearPairing,
@@ -1224,9 +1408,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       );
     return true;
   }
+  // The signed-in page offers Molt Auth's sign-in when the platform sent the
+  // account there; its page opens in that same tab.
+  if (msg?.molt === "auth_sign_in" && fromExtensionPage(sender, "signed-in.html")) {
+    ready
+      .then(() => startAuthSignIn(msg.provider, sender.tab?.id ?? null))
+      .then(
+        () => sendResponse({ ok: true }),
+        (e) => sendResponse({ ok: false, error: e.message || String(e) })
+      );
+    return true;
+  }
   if (Object.hasOwn(popupActions, msg?.molt) && fromExtensionPage(sender, "popup.html")) {
     ready
-      .then(() => popupActions[msg.molt]())
+      .then(() => popupActions[msg.molt](msg))
       .then(
         () => sendResponse({ ok: true }),
         (e) => sendResponse({ ok: false, error: e.message || String(e) })
@@ -1251,6 +1446,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.molt === "state") {
     ready.then(async () => {
       if (!port) connect();
+      const config = authRequired || authSignIn || authError ? await authSettings() : null;
       sendResponse({
         bridge,
         version: VERSION,
@@ -1262,6 +1458,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         pairing: pairing && { email: pairing.email, machine_name: pairing.machine_name, paired_at: pairing.paired_at },
         connecting: connecting && { state: connecting.state, error: connecting.error || null },
         reconnect: reconnect && !pairing,
+        // Null unless the platform sent this account to Molt Auth.
+        auth:
+          authRequired || authSignIn || authError
+            ? { required: authRequired, reachable: !!config, providers: config ? config.providers : [], signingIn: !!authSignIn, error: authError }
+            : null,
         tab: msg.tabId == null ? null : { controlled: sessions.has(msg.tabId), stopped: stopped.has(msg.tabId) },
       });
     });

@@ -29,6 +29,12 @@
       .ok { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
       .ok::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok-dot); flex: none; }
       .error { background: var(--err-tint); color: var(--err); padding: 8px 10px; border-radius: 6px; }
+      .actions { display: flex; gap: 8px; margin-top: 16px; }
+      button {
+        all: unset; box-sizing: border-box; display: inline-flex; align-items: center; height: 28px; padding: 0 10px;
+        border-radius: 4px; font-size: 12px; font-weight: 500; cursor: pointer; background: var(--ink); color: var(--surface);
+      }
+      button:focus-visible { outline: 2px solid var(--ink-3); outline-offset: 1px; }
       [hidden] { display: none !important; }
     </style>
   </head>
@@ -39,6 +45,14 @@
       <div id="done" hidden>
         <div class="ok" id="who"></div>
         <p class="muted">Next: click the Molt icon in the toolbar and press <b>Connect</b>. You can close this tab.</p>
+      </div>
+      <div id="auth" hidden>
+        <p id="auth-detail" class="muted"></p>
+        <p class="actions">
+          <button id="auth-google" hidden>Continue with Google</button>
+          <button id="auth-apple" hidden>Continue with Apple</button>
+          <button id="auth-dev" hidden>Local sign-in</button>
+        </p>
       </div>
       <div id="error" class="error" hidden></div>
     </main>

@@ -46,7 +46,7 @@
       .title { font-weight: 600; line-height: 20px; }
       .detail { grid-column: 2; margin-top: 2px; color: var(--ink-3); font-size: 12px; }
       .detail b { color: var(--ink-2); font-weight: 500; }
-      .actions { grid-column: 2; display: flex; gap: 8px; margin-top: 8px; }
+      .actions { grid-column: 2; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
       .actions:not(:has(button:not([hidden]))) { display: none; }
       code { font: 11px "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--fill); color: var(--ink-2); padding: 1px 4px; border-radius: 4px; }
       .error { grid-column: 2; margin-top: 8px; padding: 6px 8px; border-radius: 6px; background: var(--err-tint); color: var(--err); font-size: 12px; }
@@ -108,6 +108,14 @@
         <div class="actions">
           <button id="sign-in" class="solid" hidden>Sign in</button>
           <button id="sign-out" class="outline" hidden>Sign out</button>
+        </div>
+        <div id="auth-waiting" class="waiting" hidden></div>
+        <div class="actions">
+          <button id="auth-google" class="solid" hidden>Continue with Google</button>
+          <button id="auth-apple" class="solid" hidden>Continue with Apple</button>
+          <button id="auth-dev" class="soft" hidden>Local sign-in</button>
+          <button id="auth-reopen" class="solid" hidden>Open sign-in</button>
+          <button id="auth-cancel" class="outline" hidden>Cancel</button>
         </div>
         <div id="account-error" class="error" hidden></div>
       </li>

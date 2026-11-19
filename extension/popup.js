@@ -4,9 +4,9 @@ const show = (id, on) => ($(id).hidden = !on);
 // Popup actions run in the service worker; errors come back as text.
 const actionError = { account: null, connect: null, update: null };
 
-async function act(molt, slot) {
+async function act(molt, slot, extra = {}) {
   actionError[slot] = null;
-  const r = await chrome.runtime.sendMessage({ molt });
+  const r = await chrome.runtime.sendMessage({ molt, ...extra });
   if (!r?.ok) actionError[slot] = r?.error || "Something went wrong.";
   render();
 }
@@ -54,15 +54,27 @@ async function render() {
     ? "Running."
     : "Install the <b>Browser</b> plugin in the Molt app, then run <code>molt-browser setup</code> once.";
 
-  // 2. Account
+  // 2. Account. `s.auth` is null unless the platform sent this account to
+  // Molt Auth (one of its workspaces is sealed): then it signs in there.
   const signedIn = !!s.account;
+  const au = signedIn ? null : s.auth;
+  const choosing = !!au?.required && au.reachable && !au.signingIn;
   $("step-account").className = signedIn ? "done" : "current";
   if (signedIn) detail("account-detail", "Signed in as ", s.account.email || s.account.name || "your Molt account");
+  else if (au?.signingIn) detail("account-detail", "Finish signing in to ", "Molt Auth", " in the tab that opened.");
+  else if (au?.required && !au.reachable) detail("account-detail", "This account signs in through Molt Auth, which this version of the extension cannot reach yet.");
+  else if (au?.required) detail("account-detail", "This account signs in through ", "Molt Auth", ". Use the same account as the Molt app.");
   else detail("account-detail", "Use the same account as the Molt app.");
-  show("sign-in", !signedIn);
+  show("sign-in", !signedIn && !au?.required && !au?.signingIn);
   show("sign-out", signedIn);
-  show("account-error", !!actionError.account);
-  $("account-error").textContent = actionError.account || "";
+  for (const p of ["google", "apple", "dev"]) show(`auth-${p}`, choosing && au.providers.includes(p));
+  show("auth-waiting", !!au?.signingIn);
+  $("auth-waiting").textContent = au?.signingIn ? "Waiting for Molt Auth…" : "";
+  show("auth-reopen", !!au?.signingIn);
+  show("auth-cancel", !!au?.required || !!au?.signingIn);
+  const accountError = actionError.account || au?.error || null;
+  show("account-error", !!accountError);
+  $("account-error").textContent = accountError || "";
 
   // 3. Connect
   const paired = s.pairing;
@@ -111,6 +123,9 @@ async function render() {
 
 $("sign-in").onclick = () => act("sign_in", "account");
 $("sign-out").onclick = () => act("sign_out", "account");
+for (const p of ["google", "apple", "dev"]) $(`auth-${p}`).onclick = () => act("auth_sign_in", "account", { provider: p });
+$("auth-reopen").onclick = () => act("auth_reopen", "account");
+$("auth-cancel").onclick = () => act("auth_cancel", "account");
 $("connect").onclick = () => act("connect", "connect");
 $("cancel").onclick = () => act("cancel_connect", "connect");
 $("disconnect").onclick = () => act("disconnect", "connect");

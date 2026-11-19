@@ -1,0 +1,399 @@
+{
+ "_from": "moltcode/molt dtos/vectors/molt_auth_v1.json (version molt_auth_v1): the cases molt-browser checks; copy again when that file changes",
+ "mxw1": [
+  {
+   "auth_kid": "tk1",
+   "auth_public": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6",
+   "auth_seed": "968e80a2a10b0ac1169663b9eb8494a71d3d30b657da18d8351b610225d82a01",
+   "binding": {
+    "jkt": "G7qt7dsf66l2xPB4XM0Rj02rci-IIUYE6XarE2s0VHo",
+    "jti": "0123456789abcdef0123",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3"
+   },
+   "binding_bytes": "00046d787731000364656b002b473771743764736636366c3278504234584d30526a30327263692d4949555945365861724532733056486f00143031323334353637383961626364656630313233002977732f36623166326330652d336434612d346535622d386336642d3765386639613062316332642f33",
+   "device_enc_private": "a507fcc331ace32d4fe487b65e094b5af429d167fb98da6ab27d1e42f5e232bf",
+   "device_enc_public": "6521aa3762f6779eea6395b13a7ea67bf3caebffb81a863dad87dae24404a07e",
+   "device_sig_seed": "7d5221c53174e2d028ef6fba1bd4421b178685935a6721894a782b159efdd1ab",
+   "ephemeral_private": "560e481e4447ef094c12502131937861c8dbf22a202e31664941d3619d109bc3",
+   "name": "workspace DEK",
+   "secret": "57202d3ab24a8954e092fecf315859402c398bfed8cc913d9e57b7f777c07d84",
+   "wrap": {
+    "c": "GrtdXpcHcwqlj41WvtBFNITuzskb5bBs6PO1n_k7FWp4mbeWJ5KcqCUCjzK-un-1",
+    "epk": "VkhGgNnNf1pe-0C4uteA2nA6QQY962klQwjPo97qbQ8",
+    "kid": "tk1",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3",
+    "sig": "tjoZfOkIRqtWSraf7f3LguLN75lRiUgd5yTIX4ifejb77r6wgxK92dKWbuiLSas8Bp135TNrRqU_AaF2qGRmBg",
+    "v": "mxw1"
+   }
+  },
+  {
+   "auth_kid": "tk1",
+   "auth_public": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6",
+   "auth_seed": "968e80a2a10b0ac1169663b9eb8494a71d3d30b657da18d8351b610225d82a01",
+   "binding": {
+    "jkt": "G7qt7dsf66l2xPB4XM0Rj02rci-IIUYE6XarE2s0VHo",
+    "jti": "0123456789abcdef0123",
+    "purpose": "session",
+    "ref": "session/sess_1"
+   },
+   "binding_bytes": "00046d787731000773657373696f6e002b473771743764736636366c3278504234584d30526a30327263692d4949555945365861724532733056486f00143031323334353637383961626364656630313233000e73657373696f6e2f736573735f31",
+   "device_enc_private": "a507fcc331ace32d4fe487b65e094b5af429d167fb98da6ab27d1e42f5e232bf",
+   "device_enc_public": "6521aa3762f6779eea6395b13a7ea67bf3caebffb81a863dad87dae24404a07e",
+   "device_sig_seed": "7d5221c53174e2d028ef6fba1bd4421b178685935a6721894a782b159efdd1ab",
+   "ephemeral_private": "5befd7b85f0b09fb714dd367d5176a4a96bb867485535f819fc437a5838b68df",
+   "name": "session bundle",
+   "secret": "7b226163636573735f746f6b656e223a2261222c226465766963655f6964223a226465765f31222c22736964223a22736573735f31222c22757365725f6964223a225a783951704c326d543876596b34526e57633148625337654a6433227d",
+   "wrap": {
+    "c": "O3JCbfPmgmkkHAZq-iZWiNHpQOEAx5732LKJvgrcEsrv5VqBIaXjOmENT6lbSnl7louUFeveVXl1Uf6tINx2jJOebOzCQrIc6VNOotLlUTsi0_vnRPipvIRRkO7CDZ5YkyPOE51wZEMuCEA3la2S",
+    "epk": "jtJkTeodPI9do3TjBY40B9fI1jEYXZrzmfg9Bk_JAiE",
+    "kid": "tk1",
+    "purpose": "session",
+    "ref": "session/sess_1",
+    "sig": "pl4sjE56TbYabA8lsqOqPceDmOph-js33c_3Lbxcyjx-fUzWA_RwtGX20pvDyzf1nbCb3byLrHMkWuavMgYgBQ",
+    "v": "mxw1"
+   }
+  },
+  {
+   "auth_kid": "tk1",
+   "auth_public": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6",
+   "auth_seed": "968e80a2a10b0ac1169663b9eb8494a71d3d30b657da18d8351b610225d82a01",
+   "binding": {
+    "jkt": "G7qt7dsf66l2xPB4XM0Rj02rci-IIUYE6XarE2s0VHo",
+    "jti": "0123456789abcdef0123",
+    "purpose": "enroll-code",
+    "ref": "code/rc_1"
+   },
+   "binding_bytes": "00046d787731000b656e726f6c6c2d636f6465002b473771743764736636366c3278504234584d30526a30327263692d4949555945365861724532733056486f001430313233343536373839616263646566303132330009636f64652f72635f31",
+   "device_enc_private": "a507fcc331ace32d4fe487b65e094b5af429d167fb98da6ab27d1e42f5e232bf",
+   "device_enc_public": "6521aa3762f6779eea6395b13a7ea67bf3caebffb81a863dad87dae24404a07e",
+   "device_sig_seed": "7d5221c53174e2d028ef6fba1bd4421b178685935a6721894a782b159efdd1ab",
+   "ephemeral_private": "c13efba4bbb353c89d1b5b35cbcb07cc818b041f779cc0f0c270653f963b700b",
+   "name": "runner enrollment code",
+   "secret": "2de7d2aee6b86c80d424664449c038110ef1555004b1a755063cdffa8bbedef3",
+   "wrap": {
+    "c": "_jM4zFLHg6FYSMO3dh6sg-_eGeLPYNJC_XyC7CsxyNuXJKZSQQPusAyFEIKef072",
+    "epk": "-8SrxLvpCsrfgAcsGw8sW0X5il5KqjB4lGK6oc1qQxY",
+    "kid": "tk1",
+    "purpose": "enroll-code",
+    "ref": "code/rc_1",
+    "sig": "LSo9zwpie1CX6Fsi-SicTWVXzgM_t3ax9cIMFlp8LGwpAtvqKuWr-ThYx-FyW-EHroae10pWIox8MirKcUicAw",
+    "v": "mxw1"
+   }
+  }
+ ],
+ "mxw1_reject": [
+  {
+   "auth_keys": {
+    "tk1": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6"
+   },
+   "device_enc_private": "a507fcc331ace32d4fe487b65e094b5af429d167fb98da6ab27d1e42f5e232bf",
+   "error": "bad_signature",
+   "expect": {
+    "jkt": "G7qt7dsf66l2xPB4XM0Rj02rci-IIUYE6XarE2s0VHo",
+    "jti": "0123456789abcdef0123",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3"
+   },
+   "name": "ciphertext byte flipped",
+   "wrap": {
+    "c": "G7tdXpcHcwqlj41WvtBFNITuzskb5bBs6PO1n_k7FWp4mbeWJ5KcqCUCjzK-un-1",
+    "epk": "VkhGgNnNf1pe-0C4uteA2nA6QQY962klQwjPo97qbQ8",
+    "kid": "tk1",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3",
+    "sig": "tjoZfOkIRqtWSraf7f3LguLN75lRiUgd5yTIX4ifejb77r6wgxK92dKWbuiLSas8Bp135TNrRqU_AaF2qGRmBg",
+    "v": "mxw1"
+   }
+  },
+  {
+   "auth_keys": {
+    "tk1": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6"
+   },
+   "device_enc_private": "a507fcc331ace32d4fe487b65e094b5af429d167fb98da6ab27d1e42f5e232bf",
+   "error": "bad_signature",
+   "expect": {
+    "jkt": "G7qt7dsf66l2xPB4XM0Rj02rci-IIUYE6XarE2s0VHo",
+    "jti": "0123456789abcdef0123",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3"
+   },
+   "name": "re-wrapped by the edge with a DEK it chose, signed by a key auth does not hold",
+   "wrap": {
+    "c": "Hk5XjgLEgJHUTO2HsSCgHonqcNFhLt8zf-zLxmoeLn8HYY0H-RJxBc4k_WWpmk21",
+    "epk": "VkhGgNnNf1pe-0C4uteA2nA6QQY962klQwjPo97qbQ8",
+    "kid": "tk1",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3",
+    "sig": "kKhs2f39q2ejKMoDLaxNvQdtfj74l2NZkwe8Nx_UrIiv-22jUMgy2IHySM5cp7lWZQ4_VMzg77sJfPia8LtkBQ",
+    "v": "mxw1"
+   }
+  },
+  {
+   "auth_keys": {
+    "tk1": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6"
+   },
+   "device_enc_private": "a507fcc331ace32d4fe487b65e094b5af429d167fb98da6ab27d1e42f5e232bf",
+   "error": "unknown_kid",
+   "expect": {
+    "jkt": "G7qt7dsf66l2xPB4XM0Rj02rci-IIUYE6XarE2s0VHo",
+    "jti": "0123456789abcdef0123",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3"
+   },
+   "name": "re-wrapped by the edge, naming a kid nobody pins",
+   "wrap": {
+    "c": "Hk5XjgLEgJHUTO2HsSCgHonqcNFhLt8zf-zLxmoeLn8HYY0H-RJxBc4k_WWpmk21",
+    "epk": "VkhGgNnNf1pe-0C4uteA2nA6QQY962klQwjPo97qbQ8",
+    "kid": "edge",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3",
+    "sig": "kKhs2f39q2ejKMoDLaxNvQdtfj74l2NZkwe8Nx_UrIiv-22jUMgy2IHySM5cp7lWZQ4_VMzg77sJfPia8LtkBQ",
+    "v": "mxw1"
+   }
+  },
+  {
+   "auth_keys": {
+    "tk1": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6"
+   },
+   "device_enc_private": "a507fcc331ace32d4fe487b65e094b5af429d167fb98da6ab27d1e42f5e232bf",
+   "error": "binding",
+   "expect": {
+    "jkt": "G7qt7dsf66l2xPB4XM0Rj02rci-IIUYE6XarE2s0VHo",
+    "jti": "0123456789abcdef0123",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3"
+   },
+   "name": "two wraps swapped in one answer: epoch 2's wrap under epoch 3's ref",
+   "wrap": {
+    "c": "RHd-7Ttw0dYCTdWNdBY_F1TnaTVSXB2DtH6T4hJgllALqy89KQrCiqD2HEipBq2G",
+    "epk": "VkhGgNnNf1pe-0C4uteA2nA6QQY962klQwjPo97qbQ8",
+    "kid": "tk1",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/2",
+    "sig": "PhGxHp96l11KbLNam5KKABrjjADu5A8AhwuaA4-Kyc_A65LtTP0PA694KWuGllDXHsErBWs2LQT3dSJcag07Dg",
+    "v": "mxw1"
+   }
+  },
+  {
+   "auth_keys": {
+    "tk1": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6"
+   },
+   "device_enc_private": "a507fcc331ace32d4fe487b65e094b5af429d167fb98da6ab27d1e42f5e232bf",
+   "error": "bad_signature",
+   "expect": {
+    "jkt": "G7qt7dsf66l2xPB4XM0Rj02rci-IIUYE6XarE2s0VHo",
+    "jti": "0123456789abcdef0123",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3"
+   },
+   "name": "two wraps swapped, the ref field rewritten to match",
+   "wrap": {
+    "c": "RHd-7Ttw0dYCTdWNdBY_F1TnaTVSXB2DtH6T4hJgllALqy89KQrCiqD2HEipBq2G",
+    "epk": "VkhGgNnNf1pe-0C4uteA2nA6QQY962klQwjPo97qbQ8",
+    "kid": "tk1",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3",
+    "sig": "PhGxHp96l11KbLNam5KKABrjjADu5A8AhwuaA4-Kyc_A65LtTP0PA694KWuGllDXHsErBWs2LQT3dSJcag07Dg",
+    "v": "mxw1"
+   }
+  },
+  {
+   "auth_keys": {
+    "tk1": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6"
+   },
+   "device_enc_private": "a507fcc331ace32d4fe487b65e094b5af429d167fb98da6ab27d1e42f5e232bf",
+   "error": "bad_signature",
+   "expect": {
+    "jkt": "G7qt7dsf66l2xPB4XM0Rj02rci-IIUYE6XarE2s0VHo",
+    "jti": "fedcba9876543210fedc",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3"
+   },
+   "name": "an old answer replayed to a new request (another jti)",
+   "wrap": {
+    "c": "GrtdXpcHcwqlj41WvtBFNITuzskb5bBs6PO1n_k7FWp4mbeWJ5KcqCUCjzK-un-1",
+    "epk": "VkhGgNnNf1pe-0C4uteA2nA6QQY962klQwjPo97qbQ8",
+    "kid": "tk1",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3",
+    "sig": "tjoZfOkIRqtWSraf7f3LguLN75lRiUgd5yTIX4ifejb77r6wgxK92dKWbuiLSas8Bp135TNrRqU_AaF2qGRmBg",
+    "v": "mxw1"
+   }
+  },
+  {
+   "auth_keys": {
+    "tk1": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6"
+   },
+   "device_enc_private": "a507fcc331ace32d4fe487b65e094b5af429d167fb98da6ab27d1e42f5e232bf",
+   "error": "bad_signature",
+   "expect": {
+    "jkt": "qFSznpF11UsMnwzvyNep5Pm7uDxvWiAY35RzGpdQdec",
+    "jti": "0123456789abcdef0123",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3"
+   },
+   "name": "a wrap made for another device key",
+   "wrap": {
+    "c": "GrtdXpcHcwqlj41WvtBFNITuzskb5bBs6PO1n_k7FWp4mbeWJ5KcqCUCjzK-un-1",
+    "epk": "VkhGgNnNf1pe-0C4uteA2nA6QQY962klQwjPo97qbQ8",
+    "kid": "tk1",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3",
+    "sig": "tjoZfOkIRqtWSraf7f3LguLN75lRiUgd5yTIX4ifejb77r6wgxK92dKWbuiLSas8Bp135TNrRqU_AaF2qGRmBg",
+    "v": "mxw1"
+   }
+  },
+  {
+   "auth_keys": {
+    "tk1": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6"
+   },
+   "device_enc_private": "a507fcc331ace32d4fe487b65e094b5af429d167fb98da6ab27d1e42f5e232bf",
+   "error": "bad_signature",
+   "expect": {
+    "jkt": "G7qt7dsf66l2xPB4XM0Rj02rci-IIUYE6XarE2s0VHo",
+    "jti": "0123456789abcdef0123",
+    "purpose": "session",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3"
+   },
+   "name": "purpose changed from dek to session",
+   "wrap": {
+    "c": "GrtdXpcHcwqlj41WvtBFNITuzskb5bBs6PO1n_k7FWp4mbeWJ5KcqCUCjzK-un-1",
+    "epk": "VkhGgNnNf1pe-0C4uteA2nA6QQY962klQwjPo97qbQ8",
+    "kid": "tk1",
+    "purpose": "session",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3",
+    "sig": "tjoZfOkIRqtWSraf7f3LguLN75lRiUgd5yTIX4ifejb77r6wgxK92dKWbuiLSas8Bp135TNrRqU_AaF2qGRmBg",
+    "v": "mxw1"
+   }
+  },
+  {
+   "auth_keys": {
+    "tk1": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6"
+   },
+   "device_enc_private": "a507fcc331ace32d4fe487b65e094b5af429d167fb98da6ab27d1e42f5e232bf",
+   "error": "bad_signature",
+   "expect": {
+    "jkt": "G7qt7dsf66l2xPB4XM0Rj02rci-IIUYE6XarE2s0VHo",
+    "jti": "0123456789abcdef0123",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3"
+   },
+   "name": "ephemeral key replaced",
+   "wrap": {
+    "c": "GrtdXpcHcwqlj41WvtBFNITuzskb5bBs6PO1n_k7FWp4mbeWJ5KcqCUCjzK-un-1",
+    "epk": "ohlrDlcPnBUhEzIaIBpKPTRWqbXGxLSPaB_brI0SJiw",
+    "kid": "tk1",
+    "purpose": "dek",
+    "ref": "ws/6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d/3",
+    "sig": "tjoZfOkIRqtWSraf7f3LguLN75lRiUgd5yTIX4ifejb77r6wgxK92dKWbuiLSas8Bp135TNrRqU_AaF2qGRmBg",
+    "v": "mxw1"
+   }
+  }
+ ],
+ "jws": [
+  {
+   "compact": "eyJhbGciOiJFZERTQSIsImtpZCI6InRrMSIsInR5cCI6Im1vbHQtYWNjZXNzIn0.eyJhdWQiOlsicGxhdGZvcm0iLCJyZWxheSIsIm1hY2hpbmVzIl0sImNuZiI6eyJqa3QiOiJHN3F0N2RzZjY2bDJ4UEI0WE0wUmowMnJjaS1JSVVZRTZYYXJFMnMwVkhvIn0sImRpZCI6ImRldl8xIiwiZXhwIjoxNzk1MDAwMDAwLCJpYXQiOjE3OTQ5OTY0MDAsImlzcyI6Im1vbHQtYXV0aCIsInNpZCI6InNlc3NfMSIsInN1YiI6Ilp4OVFwTDJtVDh2WWs0Um5XYzFIYlM3ZUpkMyIsIndzciI6eyI2YjFmMmMwZS0zZDRhLTRlNWItOGM2ZC03ZThmOWEwYjFjMmQiOnsiZSI6MywiciI6ImFkbWluIiwicyI6InNlYWxlZCJ9fX0.SsazQ69__IUAtc2aJGT4pIeOIJMiu5IUcPe0s4isnwzK20w9R2vm8rIzs9cUL7IIGVqY2hSzEc0S6tFpD1oLAQ",
+   "header_json": "{\"alg\":\"EdDSA\",\"kid\":\"tk1\",\"typ\":\"molt-access\"}",
+   "name": "user access token, tk1",
+   "payload_json": "{\"aud\":[\"platform\",\"relay\",\"machines\"],\"cnf\":{\"jkt\":\"G7qt7dsf66l2xPB4XM0Rj02rci-IIUYE6XarE2s0VHo\"},\"did\":\"dev_1\",\"exp\":1795000000,\"iat\":1794996400,\"iss\":\"molt-auth\",\"sid\":\"sess_1\",\"sub\":\"Zx9QpL2mT8vYk4RnWc1HbS7eJd3\",\"wsr\":{\"6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d\":{\"e\":3,\"r\":\"admin\",\"s\":\"sealed\"}}}",
+   "public": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6",
+   "seed": "968e80a2a10b0ac1169663b9eb8494a71d3d30b657da18d8351b610225d82a01",
+   "typ": "molt-access"
+  },
+  {
+   "compact": "eyJhbGciOiJFZERTQSIsImp3ayI6eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlFQSXFiVGpmcU1jRGllOUpzSDYya3dBR2l0eEVQcVAyNUU3elRSUE54X2MifSwidHlwIjoibW9sdC1wcm9vZiJ9.eyJiaCI6IjQ3REVRcGo4SEJTYS1fVEltVy01SkNldVFlUmttNU5NcEpXWkczaFN1RlUiLCJkaWQiOiJkZXZfMSIsImh0bSI6IlBPU1QiLCJodHUiOiJodHRwczovL2F1dGgubW9sdC50ZXN0L3YxL2tleXMiLCJpYXQiOjE3OTQ5OTY0MDAsImp0aSI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzIn0.FsJrmdXDPwxJ7z-Ij92sOqmjijz8s-reeT8pg9fr0U6wV3xLAXUiqMa5oZnp37Lr6zXz3TFxQKVb8mruLRtiAg",
+   "header_json": "{\"alg\":\"EdDSA\",\"jwk\":{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"QPIqbTjfqMcDie9JsH62kwAGitxEPqP25E7zTRPNx_c\"},\"typ\":\"molt-proof\"}",
+   "name": "device proof, key in the header",
+   "payload_json": "{\"bh\":\"47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU\",\"did\":\"dev_1\",\"htm\":\"POST\",\"htu\":\"https://auth.molt.test/v1/keys\",\"iat\":1794996400,\"jti\":\"0123456789abcdef0123\"}",
+   "public": "40f22a6d38dfa8c70389ef49b07eb69300068adc443ea3f6e44ef34d13cdc7f7",
+   "seed": "7d5221c53174e2d028ef6fba1bd4421b178685935a6721894a782b159efdd1ab",
+   "typ": "molt-proof"
+  }
+ ],
+ "jws_reject": [
+  {
+   "compact": "eyJhbGciOiJFZERTQSIsImtpZCI6InRrMSIsInR5cCI6Im1vbHQtYWNjZXNzIn0.eyJpc3MiOiJtb2x0LWF1dGgiLCJzdWIiOiJaeDlRcEwybVQ4dllrNFJuV2MxSGJTN2VKZDMifQ.Xf_DAPn9xfOoGCXnmNR3Hc3dlp-VRjGTCG8KTNj9_CJqNrqOYmRW3nB4Yqo9KCNEF33nu6-lMhOyC7ABygsmCw",
+   "error": "bad_signature",
+   "name": "signature byte flipped",
+   "public": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6",
+   "typ": "molt-access"
+  },
+  {
+   "compact": "eyJhbGciOiJFZERTQSIsImtpZCI6InRrMSIsInR5cCI6Im1vbHQtYWNjZXNzIn0.eyJpc3MiOiJtb2x0LWF1dGgiLCJzdWIiOiJvdGhlciJ9.XP_DAPn9xfOoGCXnmNR3Hc3dlp-VRjGTCG8KTNj9_CJqNrqOYmRW3nB4Yqo9KCNEF33nu6-lMhOyC7ABygsmCw",
+   "error": "bad_signature",
+   "name": "payload changed",
+   "public": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6",
+   "typ": "molt-access"
+  },
+  {
+   "compact": "eyJhbGciOiJub25lIiwia2lkIjoidGsxIiwidHlwIjoibW9sdC1hY2Nlc3MifQ.eyJpc3MiOiJtb2x0LWF1dGgiLCJzdWIiOiJaeDlRcEwybVQ4dllrNFJuV2MxSGJTN2VKZDMifQ.",
+   "error": "bad_alg",
+   "name": "alg none",
+   "public": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6",
+   "typ": "molt-access"
+  },
+  {
+   "compact": "eyJhbGciOiJFZERTQSIsImtpZCI6InRrMSIsInR5cCI6Im1vbHQtYWNjZXNzIn0.eyJpc3MiOiJtb2x0LWF1dGgiLCJzdWIiOiJaeDlRcEwybVQ4dllrNFJuV2MxSGJTN2VKZDMifQ.XP_DAPn9xfOoGCXnmNR3Hc3dlp-VRjGTCG8KTNj9_CJqNrqOYmRW3nB4Yqo9KCNEF33nu6-lMhOyC7ABygsmCw",
+   "error": "bad_typ",
+   "name": "typ is not the one expected",
+   "public": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6",
+   "typ": "molt-runner"
+  },
+  {
+   "compact": "eyJhbGciOiJFZERTQSIsImtpZCI6InRrMSIsInR5cCI6Im1vbHQtYWNjZXNzIn0.eyJpc3MiOiJtb2x0LWF1dGgiLCJzdWIiOiJaeDlRcEwybVQ4dllrNFJuV2MxSGJTN2VKZDMifQ.XP_DAPn9xfOoGCXnmNR3Hc3dlp-VRjGTCG8KTNj9_CJqNrqOYmRW3nB4Yqo9KCNEF33nu6-lMhOyC7ABygsmCw",
+   "error": "bad_signature",
+   "name": "another key",
+   "public": "01f4f5e4fa0031502eff157370099cd0a113e1ab916d8f1187a8ea3dccbdf4cb",
+   "typ": "molt-access"
+  }
+ ],
+ "proof": {
+  "jkt": "G7qt7dsf66l2xPB4XM0Rj02rci-IIUYE6XarE2s0VHo",
+  "sign_in_nonce": [
+   {
+    "jkt": "G7qt7dsf66l2xPB4XM0Rj02rci-IIUYE6XarE2s0VHo",
+    "nonce": "CyI8sUte8ybCkF9saZ2oxaSsIi2K-PFOwpJqZMkx3Os",
+    "sign_in_id": "si_1"
+   }
+  ],
+  "body_hash": [
+   {
+    "bh": "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU",
+    "body": ""
+   },
+   {
+    "bh": "JtnLaiXmtw9hjIxepyw8fo9_o5T1aY_Na3T_1r-icts",
+    "body": "{\"keys\":[{\"epoch\":null,\"k\":\"ws\",\"workspace_id\":\"6b1f2c0e-3d4a-4e5b-8c6d-7e8f9a0b1c2d\"}]}"
+   }
+  ]
+ },
+ "jwk": [
+  {
+   "jwk": {
+    "alg": "EdDSA",
+    "crv": "Ed25519",
+    "kty": "OKP",
+    "use": "sig",
+    "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+   },
+   "name": "RFC 8037 A.3",
+   "public": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+   "thumbprint": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"
+  },
+  {
+   "jwk": {
+    "alg": "EdDSA",
+    "crv": "Ed25519",
+    "kid": "tk1",
+    "kty": "OKP",
+    "use": "sig",
+    "x": "bvNhphZwnHofxhArfzrMwzg1d4yMxkI_7jzOzbfTisY"
+   },
+   "name": "token key tk1 of the vector root",
+   "public": "6ef361a616709c7a1fc6102b7f3accc33835778c8cc6423fee3ccecdb7d38ac6",
+   "thumbprint": "ifks3C8c8a9joZjQ9ORV_XdDbOYCaEUaHJZkI_UTABg"
+  }
+ ]
+}

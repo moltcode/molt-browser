@@ -48,6 +48,18 @@ when the command carries a grant that app signed:
 - **Sign-in** uses the platform's redirect login. The extension trades the
   platform token for a browser-only token at once and keeps only that; it is
   good for nothing but the verify call below.
+- **Molt Auth.** For an account with a sealed workspace the platform mints
+  no browser token (403 `auth_required`). The extension then signs in at
+  Molt Auth with its own device: an Ed25519 and an X25519 key made by
+  WebCrypto as non-extractable keys and kept in IndexedDB. Auth's sign-in
+  page opens only once its nonce names that key; the session's wrap is
+  opened only to learn the account, and its tokens are not kept. The device
+  then asks auth for its 30-day extension token (`POST
+  /v1/browser/extension-token`, naming this browser profile), checks it, and
+  uses it where the platform's would be; it asks again 3 days before the
+  end. An account without a sealed workspace never contacts auth. This
+  build has no auth address: a local stack sets `authUrl` and `authKeys`
+  in the extension's storage, as `platformUrl`.
 - **Connect** starts in Chrome. The request (request id, browser profile id,
   signed-in account; nothing secret) waits in the host until the Molt app
   picks it up with `molt-browser watch` and shows an Allow/Deny modal. On
@@ -124,6 +136,7 @@ All commands accept `--tab ID`, `--json` and `--timeout SECONDS`.
 make check          # go vet + tests, extension syntax, version match
 make build          # dist/<platform>/molt-browser
 node scripts/e2e.mjs [--headed]   # real Chrome, throwaway profile, full CLI run
+LOCAL_STACK_SLOT=5 MOLT_ROOT=../acp node scripts/slot-e2e.mjs   # Molt Auth on a running local-stack slot
 make dist           # out/: plugin tarball, Web Store zip, artifacts.json
 ```
 
