@@ -17,6 +17,14 @@ const concat = (...parts) => new Uint8Array(Buffer.concat(parts.map((p) => Buffe
 const sha256 = async (b) => new Uint8Array(await subtle.digest("SHA-256", b));
 const now = () => Math.floor(Date.now() / 1000);
 
+// An app code as auth makes one: two groups of five Crockford base32 letters.
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const appCode = () => {
+  const r = globalThis.crypto.getRandomValues(new Uint8Array(10));
+  const s = [...r].map((b) => CROCKFORD[b & 31]).join("");
+  return `${s.slice(0, 5)}-${s.slice(5)}`;
+};
+
 export const thumbprint = async (x) => b64u(await sha256(utf8(`{"crv":"Ed25519","kty":"OKP","x":"${x}"}`)));
 const binding = ({ purpose, jkt, jti, ref }) =>
   concat(...["mxw1", purpose, jkt, jti, ref].flatMap((f) => [new Uint8Array([utf8(f).length >> 8, utf8(f).length & 0xff]), utf8(f)]));
@@ -40,7 +48,11 @@ export async function fakeAuth({ base = "http://127.0.0.1:1", kid = "tk1", users
     revoked,
     devices,
     // Test knobs: the next answers changed on the way.
-    tamper: { nonce: false, tokenBid: null, tokenRef: null, signInStatus: null, extensionStatus: null },
+    // `start`: "swap" answers with the start auth made for another request
+    // (ba63438d), "unsigned" drops `start_proof`, "url" points the page at
+    // another host, "code" binds the app code to another sign-in.
+    // `startClaims` edits the signed claims, `startTyp` signs them as another typ.
+    tamper: { nonce: false, tokenBid: null, tokenRef: null, signInStatus: null, extensionStatus: null, start: null, startClaims: null, startTyp: null },
     signIns,
     // The person finishes the sign-in on auth's page as `user`.
     complete(signInId, user = Object.keys(users)[0]) {
@@ -127,9 +139,19 @@ export async function fakeAuth({ base = "http://127.0.0.1:1", kid = "tk1", users
         if (proof.did) return error(401, "bad_proof");
         if (req.device?.sig?.x !== proof.x || !req.device?.enc?.x) return error(400, "bad_request");
         const id = `si_${++nextId}`;
-        signIns.set(id, { jkt: proof.jkt, enc: req.device.enc.x, user: null, provider: req.provider, client: req.client });
+        const code = req.confirmation === "app_code" ? appCode() : null;
+        signIns.set(id, { jkt: proof.jkt, enc: req.device.enc.x, user: null, provider: req.provider, client: req.client, code });
         const nonce = self.tamper.nonce ? "x".repeat(43) : b64u(await sha256(concat(utf8(proof.jkt), new Uint8Array([0]), utf8(id))));
-        return json(200, { sign_in_id: id, authorize_url: `${base}/v1/sign-in/dev?sign_in_id=${id}&state=s&nonce=${nonce}`, expires_in: 600, interval: 1 });
+        const host = self.tamper.start === "url" ? "http://127.0.0.2:1" : base;
+        const reply = { sign_in_id: id, authorize_url: `${host}/v1/sign-in/dev?sign_in_id=${id}&state=s&nonce=${nonce}`, expires_in: 600, interval: 1 };
+        // molt_auth's sign_start: the reply's fields plus whom it answers.
+        const iat = now();
+        const signedFor = self.tamper.start === "swap" ? "another-request-jti" : proof.jti;
+        const claims = { ...reply, iss: "molt-auth", provider: req.provider, jkt: proof.jkt, request_jti: signedFor, iat, exp: iat + 600 };
+        const start_proof = await sign(self.tamper.startTyp || "molt-sign-in-start", self.tamper.startClaims ? self.tamper.startClaims(claims) : claims);
+        const ref = self.tamper.start === "code" ? `sign-in/si_other` : `sign-in/${id}`;
+        const confirmation = code ? await wrap(req.device.enc.x, { purpose: "enroll-code", jkt: proof.jkt, jti: proof.jti, ref }, code) : null;
+        return json(200, { ...reply, ...(self.tamper.start === "unsigned" ? {} : { start_proof }), confirmation });
       }
       case "/v1/sign-in/poll": {
         if (proof.did) return error(401, "bad_proof");

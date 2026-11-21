@@ -25,15 +25,19 @@ check:
 
 # out/: the npm-layout plugin tarball (package/ root), the extension zip for
 # the Chrome Web Store (manifest `key` stripped, the store assigns the id),
-# and artifacts.json for the Molt catalog.
+# and artifacts.json for the Molt catalog. Both copies of the extension sign
+# in at the Molt Auth edge MOLT_APPS_ENV names (scripts/apps-env.mjs), and
+# the package is refused without it.
 dist: check build
+	@test -n "$(MOLT_APPS_ENV)" || (echo "no MOLT_APPS_ENV: name the apps.env with Molt Auth's edge and pins; a package without them cannot sign in" >&2; exit 1)
 	rm -rf build out
 	mkdir -p build/package out
 	cp package.json README.md icon.png build/package/
 	cp -R dist extension skills build/package/
-	tar -czf out/$(NAME)-$(VERSION).tgz -C build package
 	mkdir -p build/webstore
 	cp -R extension/. build/webstore/
+	node scripts/apps-env.mjs build/package/extension/molt-auth.js build/webstore/molt-auth.js
+	tar -czf out/$(NAME)-$(VERSION).tgz -C build package
 	jq 'del(.key)' extension/manifest.json > build/webstore/manifest.json
 	cd build/webstore && zip -qr ../../out/$(NAME)-extension-$(EXT_VERSION).zip .
 	@sha=$$(shasum -a 256 out/$(NAME)-$(VERSION).tgz | awk '{print $$1}'); \

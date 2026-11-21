@@ -57,11 +57,14 @@ let installId = null;
 // extension token, or (`auth: true`) the one Molt Auth issued this browser's
 // device (molt-auth.js) for an account the platform sends there.
 let account = null;
-// Molt Auth (molt-auth.js), dormant until the platform answers the sign-in
-// with 403 auth_required. `authRequired`: it did, and this browser has not
-// signed in there yet. `authSession`: the auth session this browser signed in
-// with ({ sid, user_id, device_id, email }, no tokens), for sign-out.
-// `authSignIn`: the sign-in waiting in a tab ({ id, url, interval, deadline }).
+// Molt Auth (molt-auth.js). A build that carries auth (`make dist` writes its
+// edge and pins from apps.env) signs in there from the first screen; one
+// without stays dormant until the platform answers the sign-in with 403
+// auth_required. `authRequired`: it did, and this browser has not signed in
+// there yet. `authSession`: the auth session this browser signed in with
+// ({ sid, user_id, device_id, email }, no tokens), for sign-out.
+// `authSignIn`: the sign-in waiting in a tab ({ id, url, code, interval,
+// deadline }); `code` is the app code auth's page asks for (S279).
 let authRequired = false;
 let authSession = null;
 let authSignIn = null;
@@ -782,11 +785,14 @@ async function clearPairing() {
   sendHello();
 }
 
-// Sign-in opens the platform's redirect login in a tab; it comes back to
-// signed-in.html with a platform token, which is traded at once for a
-// browser-only extension token and dropped. Any site can navigate to that
-// page, so it only counts with the state this browser started sign-in with.
+// A build with no auth: sign-in opens the platform's redirect login in a
+// tab; it comes back to signed-in.html with a platform token, which is
+// traded at once for a browser-only extension token and dropped. Any site
+// can navigate to that page, so it only counts with the state this browser
+// started sign-in with. A build that carries auth starts there instead
+// (startAuthSignIn), from the popup's provider buttons.
 async function signIn() {
+  if (await authSettings()) deny("signed_out", "sign in with Molt Auth: choose Google or Apple");
   const state = crypto.randomUUID();
   await chrome.storage.session.set({ signInState: { state, expires_at: Date.now() + 10 * 60 * 1000 } });
   const returnUrl = `${chrome.runtime.getURL("signed-in.html")}?state=${state}`;
@@ -826,12 +832,14 @@ async function authSettings() {
   return authConfig(await chrome.storage.local.get(["authUrl", "authKeys"]));
 }
 
-// Only ever called once the platform sent this account to auth, or while
-// this browser holds an auth sign-in: the dormant rule.
+// A build with no auth calls it only once the platform sent this account
+// there, or while this browser holds an auth sign-in: the dormant rule.
 async function authApi() {
-  if (!authRequired && !authSession && !account?.auth) deny("signed_out", "sign in to Molt first");
   const config = await authSettings();
-  if (!config) throw new Error(AUTH_UNREACHABLE);
+  if (!config) {
+    if (!authRequired && !authSession && !account?.auth) deny("signed_out", "sign in to Molt first");
+    throw new Error(AUTH_UNREACHABLE);
+  }
   return authClient({ fetch: (...args) => globalThis.fetch(...args), store: authStore, config });
 }
 
@@ -854,7 +862,7 @@ async function startAuthSignIn(provider, tabId) {
   authError = null;
   if (authPoll) clearTimeout(authPoll);
   const s = await api.startSignIn(provider);
-  await setAuthSignIn({ id: s.id, url: s.url, interval: s.interval, deadline: s.deadline });
+  await setAuthSignIn({ id: s.id, url: s.url, code: s.code, interval: s.interval, deadline: s.deadline });
   if (tabId != null) await chrome.tabs.update(tabId, { url: s.url });
   else await chrome.tabs.create({ url: s.url });
   scheduleAuthPoll(s.id);
@@ -1446,7 +1454,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.molt === "state") {
     ready.then(async () => {
       if (!port) connect();
-      const config = authRequired || authSignIn || authError ? await authSettings() : null;
+      // A build that carries auth offers it from the first screen (`direct`).
+      const config = await authSettings();
+      const direct = !!config && !account;
+      const offered = direct || authRequired || authSignIn || authError;
       sendResponse({
         bridge,
         version: VERSION,
@@ -1458,11 +1469,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         pairing: pairing && { email: pairing.email, machine_name: pairing.machine_name, paired_at: pairing.paired_at },
         connecting: connecting && { state: connecting.state, error: connecting.error || null },
         reconnect: reconnect && !pairing,
-        // Null unless the platform sent this account to Molt Auth.
-        auth:
-          authRequired || authSignIn || authError
-            ? { required: authRequired, reachable: !!config, providers: config ? config.providers : [], signingIn: !!authSignIn, error: authError }
-            : null,
+        // Null unless this build signs in at Molt Auth or the platform sent the account there.
+        auth: offered
+          ? {
+              required: authRequired || direct,
+              direct,
+              reachable: !!config,
+              providers: config ? config.providers : [],
+              signingIn: !!authSignIn,
+              code: authSignIn?.code || null,
+              error: authError,
+            }
+          : null,
         tab: msg.tabId == null ? null : { controlled: sessions.has(msg.tabId), stopped: stopped.has(msg.tabId) },
       });
     });

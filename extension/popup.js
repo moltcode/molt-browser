@@ -54,14 +54,15 @@ async function render() {
     ? "Running."
     : "Install the <b>Browser</b> plugin in the Molt app, then run <code>molt-browser setup</code> once.";
 
-  // 2. Account. `s.auth` is null unless the platform sent this account to
-  // Molt Auth (one of its workspaces is sealed): then it signs in there.
+  // 2. Account. `s.auth` is null unless this build signs in at Molt Auth
+  // (`direct`, from this first screen) or the platform sent the account there.
   const signedIn = !!s.account;
   const au = signedIn ? null : s.auth;
   const choosing = !!au?.required && au.reachable && !au.signingIn;
   $("step-account").className = signedIn ? "done" : "current";
   if (signedIn) detail("account-detail", "Signed in as ", s.account.email || s.account.name || "your Molt account");
   else if (au?.signingIn) detail("account-detail", "Finish signing in to ", "Molt Auth", " in the tab that opened.");
+  else if (au?.direct) detail("account-detail", "Sign in at ", "Molt Auth", " with the account you use in the Molt app.");
   else if (au?.required && !au.reachable) detail("account-detail", "This account signs in through Molt Auth, which this version of the extension cannot reach yet.");
   else if (au?.required) detail("account-detail", "This account signs in through ", "Molt Auth", ". Use the same account as the Molt app.");
   else detail("account-detail", "Use the same account as the Molt app.");
@@ -69,9 +70,10 @@ async function render() {
   show("sign-out", signedIn);
   for (const p of ["google", "apple", "dev"]) show(`auth-${p}`, choosing && au.providers.includes(p));
   show("auth-waiting", !!au?.signingIn);
-  $("auth-waiting").textContent = au?.signingIn ? "Waiting for Molt Auth…" : "";
+  if (au?.signingIn && au.code) detail("auth-waiting", "When Molt Auth asks for a code, enter ", au.code, ". It shows only here.");
+  else $("auth-waiting").textContent = au?.signingIn ? "Waiting for Molt Auth…" : "";
   show("auth-reopen", !!au?.signingIn);
-  show("auth-cancel", !!au?.required || !!au?.signingIn);
+  show("auth-cancel", (!!au?.required && !au?.direct) || !!au?.signingIn);
   const accountError = actionError.account || au?.error || null;
   show("account-error", !!accountError);
   $("account-error").textContent = accountError || "";

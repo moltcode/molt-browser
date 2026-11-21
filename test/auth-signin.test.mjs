@@ -1,8 +1,8 @@
 // node --test test/  — the extension signing in at Molt Auth (S220), driven
-// through the real service worker and popup: only after the platform's 403
-// auth_required, never for an account with no sealed workspace; the auth
-// pair verified at the platform, install_mismatch included; renewal and
-// sign-out.
+// through the real service worker and popup: from the first screen in a
+// build that carries auth, with the app code shown while it waits; in one
+// without, only after the platform's 403 auth_required; the auth pair
+// verified at the platform, install_mismatch included; renewal and sign-out.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fakeAuth } from "./fake-auth.mjs";
@@ -138,7 +138,7 @@ test("auth_required with no auth in this build: the popup says so and nothing is
   const { fake, auth } = await boot(t, { authConfigured: false });
   assert.deepEqual(await signedInPage(fake), { ok: true, authRequired: true, reachable: false, providers: [] });
   const s = await state(fake);
-  assert.deepEqual(s.auth, { required: true, reachable: false, providers: [], signingIn: false, error: null });
+  assert.deepEqual(s.auth, { required: true, direct: false, reachable: false, providers: [], signingIn: false, code: null, error: null });
   const r = await fake.send({ molt: "auth_sign_in", provider: "google" });
   assert.equal(r.ok, false);
   assert.match(r.error, /cannot reach/);
@@ -163,7 +163,8 @@ test("the popup's own sign-in at auth opens a new tab; Cancel drops it, and fini
   // The person finishes on the page after all: the cancelled sign-in is not polled.
   auth.complete(new URL(page.url).searchParams.get("sign_in_id"), "u1");
   const s = await state(fake);
-  assert.equal(s.auth, null);
+  assert.equal(s.auth.signingIn, false, "back to the first screen's offer");
+  assert.equal(s.auth.code, null);
   assert.equal(fake.local.account, undefined);
   assert.equal(fake.session.authSignIn, undefined);
 });
@@ -223,8 +224,47 @@ test("sign-out ends the auth session at auth and forgets the device's id", async
   assert.equal(fake.local.account, undefined);
   assert.equal(fake.local.authSession, undefined);
   assert.equal(fake.local.authRequired, undefined);
-  assert.equal((await state(fake)).auth, null);
+  const s = await state(fake);
+  assert.equal(s.auth.direct, true, "signed out: the first screen offers auth again");
+  assert.equal(s.auth.signingIn, false);
   assert.equal(fake.idb.dbs.get("molt-auth").get("kv").get("device").did, null);
+});
+
+test("a build that carries auth signs in there from the first screen, shows the app code, and never asks the platform", async (t) => {
+  const { fake, auth, platform: p } = await boot(t);
+  const first = await state(fake);
+  assert.deepEqual(first.auth, { required: true, direct: true, reachable: true, providers: ["dev", "google"], signingIn: false, code: null, error: null });
+  const r = await fake.send({ molt: "sign_in" });
+  assert.equal(r.ok, false, "the platform's redirect login is not offered");
+  assert.match(r.error, /Molt Auth/);
+
+  const account = stored(fake, "account");
+  assert.deepEqual(await fake.send({ molt: "auth_sign_in", provider: "dev" }), { ok: true });
+  const page = fake.opened.at(-1);
+  const id = new URL(page.url).searchParams.get("sign_in_id");
+  const waiting = await state(fake);
+  assert.equal(waiting.auth.signingIn, true);
+  assert.equal(waiting.auth.code, auth.signIns.get(id).code, "the code auth's page will ask for");
+  assert.match(waiting.auth.code, /^[0-9A-HJKMNP-TV-Z]{5}-[0-9A-HJKMNP-TV-Z]{5}$/);
+  auth.complete(id, "u1");
+  const a = await account;
+  assert.equal(a.auth, true);
+  assert.equal(a.user.id, "u1");
+  assert.equal(fake.session.authSignIn, undefined, "the code goes with the sign-in");
+  assert.equal((await state(fake)).auth, null, "signed in: nothing to offer");
+  assert.deepEqual(p.calls, [], "the platform saw nothing");
+});
+
+test("a build that carries auth refuses a swapped start: no tab opens and the popup says why", async (t) => {
+  const { fake, auth } = await boot(t);
+  auth.tamper.start = "swap";
+  const opened = fake.opened.length;
+  const r = await fake.send({ molt: "auth_sign_in", provider: "dev" });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /signed for this browser/);
+  assert.equal(fake.opened.length, opened, "no page opened");
+  assert.equal((await state(fake)).auth.signingIn, false);
+  assert.equal(fake.session.authSignIn, undefined);
 });
 
 // The service worker's answer to {molt: "state"}, signed out and bridged.
@@ -262,6 +302,15 @@ test("the popup: the platform's ask offers the providers; a sign-in in flight wa
   const ended = await renderPopup(popupState({ auth: { required: true, reachable: true, providers: ["google"], signingIn: false, error: "The sign-in expired. Start it again." } }));
   assert.equal(ended.el("account-error").textContent, "The sign-in expired. Start it again.");
   assert.ok(ended.visible("auth-google"));
+
+  const direct = await renderPopup(popupState({ auth: { required: true, direct: true, reachable: true, providers: ["google", "apple"], signingIn: false, code: null, error: null } }));
+  assert.equal(direct.el("account-detail").textContent, "Sign in at Molt Auth with the account you use in the Molt app.");
+  assert.ok(direct.visible("auth-google") && direct.visible("auth-apple"));
+  assert.ok(!direct.visible("sign-in") && !direct.visible("auth-cancel"));
+
+  const code = await renderPopup(popupState({ auth: { required: true, direct: true, reachable: true, providers: ["google", "apple"], signingIn: true, code: "7K2QF-M9XWD", error: null } }));
+  assert.equal(code.el("auth-waiting").textContent, "When Molt Auth asks for a code, enter 7K2QF-M9XWD. It shows only here.");
+  assert.ok(code.visible("auth-waiting") && code.visible("auth-reopen") && code.visible("auth-cancel"));
 
   const plain = await renderPopup(popupState());
   assert.ok(plain.visible("sign-in"));

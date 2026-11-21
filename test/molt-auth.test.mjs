@@ -140,6 +140,69 @@ test("sign-in: a start whose nonce names another key is refused before any page 
   assert.equal(await codeOf(api.startSignIn("apple")), "bad_provider", "a provider the config does not offer");
 });
 
+test("sign-in: the start asks for the app code and shows the one auth wrapped to this device and this start", async () => {
+  const { auth, api } = await client();
+  const start = await api.startSignIn("dev");
+  assert.match(start.code, /^[0-9A-HJKMNP-TV-Z]{5}-[0-9A-HJKMNP-TV-Z]{5}$/);
+  assert.equal(start.code, auth.signIns.get(start.id).code, "the code auth's page will ask for");
+  assert.ok(start.deadline > Math.floor(Date.now() / 1000) + 590);
+});
+
+test("sign-in: a swapped, unsigned or off-provider start, or a code for another sign-in, opens no page (ba63438d)", async () => {
+  for (const [tamper, code] of [
+    ["swap", "invalid_sign_in_start"],
+    ["unsigned", "invalid_sign_in_start"],
+    ["url", "invalid_sign_in_start"],
+    ["code", "invalid_confirmation_code"],
+  ]) {
+    const { auth, api } = await client();
+    auth.tamper.start = tamper;
+    assert.equal(await codeOf(api.startSignIn("dev")), code, tamper);
+    auth.tamper.start = null;
+    assert.equal(await codeOf(api.startSignIn("dev")), "ok", `${tamper}: the next honest start opens`);
+  }
+});
+
+test("sign-in: the start proof must name this device, this provider, a live window and the answer's own fields", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  for (const [name, edit] of [
+    ["another device's key", (c) => ({ ...c, jkt: "another-jkt" })],
+    ["another provider", (c) => ({ ...c, provider: "google" })],
+    ["expired", (c) => ({ ...c, iat: now - 700, exp: now - 100 })],
+    ["issued in the future", (c) => ({ ...c, iat: now + 120, exp: now + 720 })],
+    ["window not expires_in", (c) => ({ ...c, exp: c.iat + 300 })],
+    ["another sign-in id", (c) => ({ ...c, sign_in_id: "si_other" })],
+    ["another page", (c) => ({ ...c, authorize_url: `${c.authorize_url}&x=1` })],
+    ["another interval", (c) => ({ ...c, interval: 9 })],
+  ]) {
+    const { auth, api } = await client();
+    auth.tamper.startClaims = edit;
+    assert.equal(await codeOf(api.startSignIn("dev")), "invalid_sign_in_start", name);
+  }
+  const { auth, api } = await client();
+  auth.tamper.startTyp = "molt-browser";
+  assert.equal(await codeOf(api.startSignIn("dev")), "invalid_sign_in_start", "a token of another typ");
+});
+
+test("sign-in: the page is the provider's own, on https, with no credentials or fragment", async () => {
+  const { providerUrlOk } = await import("../extension/molt-auth.js");
+  const base = "https://id.moltcode.com";
+  assert.ok(providerUrlOk(base, "google", "https://accounts.google.com/o/oauth2/v2/auth?x=1"));
+  assert.ok(providerUrlOk(base, "apple", "https://appleid.apple.com/auth/authorize?x=1"));
+  assert.ok(providerUrlOk("http://127.0.0.1:4383", "dev", "http://127.0.0.1:4383/v1/sign-in/dev?x=1"));
+  for (const [p, u] of [
+    ["google", "http://accounts.google.com/o/oauth2/v2/auth"],
+    ["google", "https://accounts.google.com.evil.test/o/oauth2/v2/auth"],
+    ["google", "https://accounts.google.com:8443/o/oauth2/v2/auth"],
+    ["google", "https://u:p@accounts.google.com/o/oauth2/v2/auth"],
+    ["google", "https://accounts.google.com/o/oauth2/v2/auth#frag"],
+    ["google", "https://appleid.apple.com/auth/authorize"],
+    ["apple", "https://accounts.google.com/o/oauth2/v2/auth"],
+    ["dev", "https://id.moltcode.com/v1/sign-in/dev"],
+    ["other", "https://accounts.google.com/o/oauth2/v2/auth"],
+  ]) assert.equal(providerUrlOk(p === "dev" ? "http://127.0.0.1:4383" : base, p, u), false, `${p} ${u}`);
+});
+
 test("extension token: asked by the device, opened from its wrap, checked for this install", async () => {
   const { auth, api, done } = await signedIn();
   const t = await api.extensionToken("install-1");

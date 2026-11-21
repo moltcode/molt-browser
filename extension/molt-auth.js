@@ -22,9 +22,11 @@
 // error or a URL.
 
 export const ANSWER_CAP = 256 * 1024;
-// Production has no key service yet (P9 deploys it dormant): with no URL or
-// no pinned key the extension says so and never calls one. A local stack
-// sets `authUrl` and `authKeys` in chrome.storage.local, as `platformUrl`.
+// The key service this build signs in at. `make dist` writes both from the
+// apps.env MOLT_APPS_ENV names (scripts/apps-env.mjs) and refuses without
+// one; the source tree has none, so an unpacked copy says so and never calls
+// one. A local stack sets `authUrl` and `authKeys` in chrome.storage.local,
+// as `platformUrl`.
 export const AUTH_URL = null;
 export const AUTH_KEYS = "";
 // The extension token lives 30 days; a new one is asked this long before.
@@ -324,6 +326,74 @@ export async function checkExtensionToken(token, keys, { installId, did, now = n
   return c;
 }
 
+// -- A sign-in's start ---------------------------------------------------------------
+
+/**
+ * `start_proof`, a `molt-sign-in-start` JWS by a pinned auth key, names this
+ * provider, this device's key and this request's proof `jti`, is fresh, and
+ * carries the same `sign_in_id`, `authorize_url`, `interval` and
+ * `expires_in` the answer does (molt_wire's `start_proof_ok`). A start
+ * answered for another device or another request (ba63438d) never opens.
+ */
+export async function checkStartProof(answer, { keys, provider, jkt, jti, now = nowS() }) {
+  let c;
+  try {
+    c = await verifyAuthJws(answer?.start_proof, keys, "molt-sign-in-start");
+  } catch {
+    fail("invalid_sign_in_start", "Molt Auth's sign-in did not come signed for this browser");
+  }
+  const int = (v) => (Number.isInteger(v) ? v : null);
+  const [iat, exp, ttl, interval] = [int(c.iat), int(c.exp), int(c.expires_in), int(c.interval)];
+  const fresh =
+    iat !== null && exp !== null && ttl !== null && interval !== null &&
+    iat <= now + 5 && exp > now && exp - iat === ttl && ttl >= 1 && ttl <= 600 && interval >= 1 && interval <= 60;
+  const same = ["sign_in_id", "authorize_url", "interval", "expires_in"].every(
+    (k) => c[k] !== undefined && c[k] !== null && c[k] === answer[k]
+  );
+  if (!fresh || !same || c.provider !== provider || c.request_jti !== jti || c.jkt !== jkt) {
+    fail("invalid_sign_in_start", "Molt Auth's sign-in did not come signed for this browser");
+  }
+  return c;
+}
+
+/**
+ * The tab opens only the provider's own page: auth's dev page on auth's own
+ * origin, Google's and Apple's authorize endpoints over https.
+ */
+export function providerUrlOk(base, provider, url) {
+  let u, auth;
+  try {
+    u = new URL(url);
+    auth = new URL(base);
+  } catch {
+    return false;
+  }
+  if (u.username || u.password || u.hash) return false;
+  if (provider === "dev") return u.origin === auth.origin && u.pathname === "/v1/sign-in/dev";
+  const want = { google: ["accounts.google.com", "/o/oauth2/v2/auth"], apple: ["appleid.apple.com", "/auth/authorize"] }[provider];
+  return !!want && u.protocol === "https:" && u.port === "" && u.hostname === want[0] && u.pathname === want[1];
+}
+
+const CROCKFORD = /^[0-9A-HJKMNP-TV-Z]{5}-[0-9A-HJKMNP-TV-Z]{5}$/;
+
+/**
+ * The app code (S279): auth's `confirmation` wrap, purpose `enroll-code`,
+ * bound to this device's key, the start's `jti` and `sign-in/<id>`, signed
+ * by a pinned key. The browser's page asks for it after the provider, so a
+ * sign-in finished in a browser without it never becomes this device's.
+ */
+export async function openConfirmation(wrap, device, keys, { jti, signInId }) {
+  let code = null;
+  try {
+    const plain = await openWrap(wrap, device, keys, { purpose: "enroll-code", jti, ref: `sign-in/${signInId}` });
+    code = new TextDecoder().decode(plain);
+  } catch {
+    code = null;
+  }
+  if (typeof code !== "string" || !CROCKFORD.test(code)) fail("invalid_confirmation_code", "Molt Auth's sign-in code did not open on this browser");
+  return code;
+}
+
 // -- Requests ----------------------------------------------------------------------
 
 async function readCapped(res, cap) {
@@ -397,12 +467,17 @@ const refused = (a) => new MoltAuthError(typeof a.json.error === "string" && a.j
  */
 export function authClient({ fetch, store, config }) {
   return {
-    /** S23: a sign-in with `provider`; its page is answered only once its nonce names this device. */
+    /**
+     * S23: a sign-in with `provider`. Its page is answered only once its
+     * nonce names this device, auth's signed start proof matches this
+     * request (ba63438d) and the page is the provider's; `code` is the app
+     * code (S279) the user types on auth's page after the provider.
+     */
     async startSignIn(provider) {
       if (!config.providers.includes(provider)) fail("bad_provider");
       for (let retries = 1; ; retries--) {
         const device = await ensureDevice(store);
-        const body = { provider, device: deviceKeys(device), client: "web", device_name: "Chrome extension" };
+        const body = { provider, device: deviceKeys(device), client: "web", device_name: "Chrome extension", confirmation: "app_code" };
         const a = await signed(fetch, config, device, "POST", "/v1/sign-in/start", body, { withDid: false });
         if (a.status === 409 && a.json.error === "device_key_retired" && retries > 0) {
           await retireDevice(store);
@@ -419,11 +494,15 @@ export function authClient({ fetch, store, config }) {
           nonce = null;
         }
         if (nonce !== (await signInNonce(device.jkt, signInId))) fail("nonce_mismatch", "Molt Auth's sign-in page does not name this browser's key");
+        const proof = await checkStartProof(a.json, { keys: config.keys, provider, jkt: device.jkt, jti: a.jti });
+        if (!providerUrlOk(config.base, provider, url)) fail("invalid_sign_in_start", "Molt Auth's sign-in page is not the provider's");
+        const code = await openConfirmation(a.json.confirmation, device, config.keys, { jti: a.jti, signInId });
         return {
           id: signInId,
           url,
-          interval: Math.min(30, Math.max(1, Number(a.json.interval) || 2)),
-          deadline: nowS() + Math.min(3600, Math.max(1, Number(a.json.expires_in) || 600)),
+          code,
+          interval: Math.min(30, proof.interval),
+          deadline: nowS() + proof.expires_in,
         };
       }
     },
