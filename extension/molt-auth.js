@@ -107,12 +107,18 @@ const LOOPBACK = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
 
 /**
  * The key service: `{base, keys, providers}`, or null when this build has
- * none (no URL, or no usable pinned key). `saved` is chrome.storage.local's
- * `authUrl` and `authKeys`, a local stack's override.
+ * none (no URL, or no usable pinned key). A packaged build (`make dist`,
+ * scripts/apps-env.mjs) carries its edge and pins and takes only those:
+ * `saved`, chrome.storage.local's `authUrl` and `authKeys`, is a local
+ * stack's override and is read only by a build that carries none
+ * (Morpheus's re-review: a page or a person who could write local storage
+ * must never repoint a release at another edge or pins). `built` is the
+ * build's own pair; tests pass one.
  */
-export function authConfig(saved = {}) {
-  const base = (typeof saved.authUrl === "string" && saved.authUrl) || AUTH_URL;
-  const keys = parseAuthKeys(typeof saved.authKeys === "string" && saved.authKeys ? saved.authKeys : AUTH_KEYS);
+export function authConfig(saved = {}, built = { url: AUTH_URL, keys: AUTH_KEYS }) {
+  const own = typeof built?.url === "string" && built.url !== "";
+  const base = own ? built.url : typeof saved.authUrl === "string" ? saved.authUrl : "";
+  const keys = parseAuthKeys(own ? built.keys : typeof saved.authKeys === "string" ? saved.authKeys : "");
   if (!base || !/^https?:\/\//.test(base) || Object.keys(keys).length === 0) return null;
   const clean = base.replace(/\/+$/, "");
   return { base: clean, keys, providers: LOOPBACK.test(clean) ? ["dev", "google"] : ["google", "apple"] };

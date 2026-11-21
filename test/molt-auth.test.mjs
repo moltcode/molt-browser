@@ -100,6 +100,19 @@ test("no auth in this build: no config, so nothing can call one; a local stack's
   assert.deepEqual(Object.keys(parseAuthKeys(`a:${x},b:nope,:${x}`)), ["a"]);
 });
 
+test("a packaged build takes only its own edge and pins: stored overrides are ignored", () => {
+  const x = Buffer.alloc(32, 1).toString("base64url");
+  const y = Buffer.alloc(32, 2).toString("base64url");
+  const built = { url: "https://id.moltcode.com", keys: JSON.stringify({ keys: [{ kid: "tk-prod-1", x }] }) };
+  for (const saved of [{}, { authUrl: "https://evil.example", authKeys: `evil:${y}` }, { authUrl: "https://evil.example" }, { authKeys: `evil:${y}` }]) {
+    const config = authConfig(saved, built);
+    assert.equal(config.base, "https://id.moltcode.com", JSON.stringify(saved));
+    assert.deepEqual(Object.keys(config.keys), ["tk-prod-1"], JSON.stringify(saved));
+  }
+  // A build that carries none (the source tree, a local stack) still reads the override.
+  assert.equal(authConfig({ authUrl: "http://127.0.0.1:4383", authKeys: `tk1:${x}` }, { url: null, keys: "" }).base, "http://127.0.0.1:4383");
+});
+
 async function client(over = {}) {
   const auth = await fakeAuth({ base: "http://127.0.0.1:4383" });
   const s = store();
