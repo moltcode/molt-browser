@@ -19,13 +19,13 @@ listens on a private socket in Molt's plugin state directory.
 - `molt-browser` on every agent's PATH, through `~/.moltcode/bin`.
 - The `molt-browser` skill, which teaches agents the snapshot → ref → act
   loop and the rules around Stop.
-- The Molt Code Browser extension (`extension/`, Manifest V3).
+- The Molt Code extension for Chrome (`extension/`, Manifest V3).
 
 ## Install
 
 1. In Molt Code, open **Plugins → Browser (Chrome) → Install**.
 2. Install the extension:
-   - **Chrome Web Store:** [Molt Code Browser](https://chromewebstore.google.com/detail/fbcpkgpfkngdmblgndnahfilmblciggp)
+   - **Chrome Web Store:** [Molt Code](https://chromewebstore.google.com/detail/fbcpkgpfkngdmblgndnahfilmblciggp)
      (in review). Then run `molt-browser setup` once to register the bridge.
    - **Unpacked, for now:** run `molt-browser setup`. It registers the native
      host with every Chromium-family browser it finds (Chrome, Chromium,
@@ -45,26 +45,23 @@ its own, connects to the Molt app on this computer only after the platform
 confirms both are signed in to the same account, and runs a command only
 when the command carries a grant that app signed:
 
-- **Sign-in** uses the platform's redirect login. The extension trades the
-  platform token for a browser-only token at once and keeps only that; it is
-  good for nothing but the verify call below.
-- **Molt Auth.** For an account with a sealed workspace the platform mints
-  no browser token (403 `auth_required`). The extension then signs in at
-  Molt Auth with its own device: an Ed25519 and an X25519 key made by
-  WebCrypto as non-extractable keys and kept in IndexedDB. Auth's sign-in
-  page opens only once its nonce names that key; the session's wrap is
-  opened only to learn the account, and its tokens are not kept. The device
-  then asks auth for its 30-day extension token (`POST
-  /v1/browser/extension-token`, naming this browser profile), checks it, and
-  uses it where the platform's would be; it asks again 3 days before the
-  end. An account without a sealed workspace never contacts auth. This
-  build has no auth address: a local stack sets `authUrl` and `authKeys`
-  in the extension's storage, as `platformUrl`.
+- **Sign-in** is at Molt Auth (id.moltcode.com) with the extension's own
+  device: an Ed25519 and an X25519 key made by WebCrypto as non-extractable
+  keys and kept in IndexedDB. Auth's sign-in page opens only once auth's
+  signed start names that key; the session's wrap is opened only to learn
+  the account, and its tokens are not kept. The device then asks auth for
+  its 30-day extension token (`POST /v1/browser/extension-token`, naming
+  this browser profile), checks it against the pinned keys, and uses it
+  for the verify call below; it asks again 3 days before the end. `make
+  dist` writes auth's edge and pinned keys from `MOLT_APPS_ENV` into the
+  packaged extension and refuses without them; the source tree has none,
+  so a local stack sets `authUrl` and `authKeys` in the extension's
+  storage, as `platformUrl`.
 - **Connect** starts in Chrome. The request (request id, browser profile id,
   signed-in account; nothing secret) waits in the host until the Molt app
   picks it up with `molt-browser watch` and shows an Allow/Deny modal. On
-  Allow the app asks the platform for a 5-minute connect token naming its
-  user, machine and Ed25519 *public* key and hands it to Chrome. Chrome sends
+  Allow the app asks Molt Auth for a 5-minute connect token naming its
+  user, device, machine and Ed25519 *public* key and hands it to Chrome. Chrome sends
   it to the platform's `POST /api/browser/verify` with its own token; the
   platform checks both signatures and compares the two account ids in
   constant time (no database lookup). Only then does Chrome store the app's

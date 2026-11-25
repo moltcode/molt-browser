@@ -1,11 +1,20 @@
 name: release
 
 # Push a v<version> tag matching package.json to build the plugin tarball and
-# the Chrome Web Store zip, and publish both on the GitHub release.
+# the Chrome Web Store zip, and publish both on the GitHub release. A manual
+# run on main releases package.json's version and makes its tag. Both
+# extension copies sign in at the Molt Auth edge the public apps.env names
+# (the apps_env input, else the MOLT_APPS_ENV repo variable); with neither,
+# make dist refuses.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      apps_env:
+        description: The public apps.env (MOLT_AUTH_URL, MOLT_AUTH_PUBLIC_KEYS) the extension signs in with. Empty means the MOLT_APPS_ENV repo variable
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -20,7 +29,7 @@ jobs:
           go-version: "1.26"
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version-file: .node-version
 
       - name: Check tag matches package.json
         if: github.event_name == 'push'
@@ -30,6 +39,14 @@ jobs:
             echo "tag $GITHUB_REF_NAME does not match package.json ($want)" >&2
             exit 1
           fi
+
+      - name: Name the apps.env
+        env:
+          APPS_ENV: ${{ inputs.apps_env || vars.MOLT_APPS_ENV }}
+        run: |
+          [ -n "$APPS_ENV" ] || { echo "::error::no apps_env input and no MOLT_APPS_ENV variable: a package without Molt Auth's edge cannot sign in"; exit 1; }
+          printf '%s\n' "$APPS_ENV" > "$RUNNER_TEMP/apps.env"
+          echo "MOLT_APPS_ENV=$RUNNER_TEMP/apps.env" >> "$GITHUB_ENV"
 
       - name: Build
         run: make dist
@@ -42,6 +59,6 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" out/*.tgz out/*.zip out/artifacts.json --clobber
           else
-            gh release create "$tag" out/*.tgz out/*.zip out/artifacts.json --title "$tag" \
+            gh release create "$tag" out/*.tgz out/*.zip out/artifacts.json --target "$GITHUB_SHA" --title "$tag" \
               --notes "Plugin tarball for Molt Code plus the Chrome extension zip."
           fi
